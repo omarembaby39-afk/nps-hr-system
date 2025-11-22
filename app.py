@@ -1,3 +1,5 @@
+import os
+print("FILES:", os.listdir("."))
 
 import streamlit as st
 
