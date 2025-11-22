@@ -1,7 +1,0 @@
-streamlit
-pandas
-python-dateutil
-reportlab
-psycopg2-binary
-supabase==2.4.3
-bcrypt
