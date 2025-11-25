@@ -236,7 +236,6 @@ def add_or_update_attendance(worker_code, project_code, att_date, status, overti
 # ALTER TABLE attendance ADD CONSTRAINT uq_att UNIQUE (worker_code, att_date);
 # You can run it manually once in psql.
 
-
 # -------------------------
 # ID Card Export (ReportLab)
 # -------------------------
@@ -273,8 +272,6 @@ def export_id_card(row):
             file_name=filename,
             mime="application/pdf",
         )
-
-
 # -------------------------
 # Pages
 # -------------------------
@@ -604,3 +601,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
