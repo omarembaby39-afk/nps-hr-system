@@ -1214,7 +1214,16 @@ def assignments_page():
 
 
 def attendance_page():
-    st.header("📅 Global Attendance – Today (with Time In / Out)")
+    st.header("📅 Global Attendance – Any Date (with Time In / Out)")
+
+    # Select date to add / edit attendance
+    att_date = st.date_input(
+        "Select attendance date",
+        value=TODAY,
+        help="Choose any past or future day to add or modify attendance",
+    )
+    att_date_str = att_date.isoformat()
+
 
     conn = get_connection()
     workers = pd.read_sql("SELECT * FROM workers ORDER BY name", conn)
@@ -1243,7 +1252,7 @@ def attendance_page():
                 ORDER BY id DESC LIMIT 1
                 """,
                 conn,
-                params=(w["id"], TODAY.isoformat()),
+                params=(w["id"], att_date_str),
             )
             conn.close()
 
@@ -1297,7 +1306,7 @@ def attendance_page():
             toggle_attendance(
                 w["id"],
                 proj_id,
-                TODAY.isoformat(),
+                att_date_str,
                 int(present),
                 t_in.strftime("%H:%M"),
                 t_out.strftime("%H:%M"),
@@ -1927,7 +1936,26 @@ def main():
     )
     st.session_state["page"] = selected_page
 
-    
+    st.sidebar.markdown("### Quick Actions")
+    qa1, qa2 = st.sidebar.columns(2)
+    with qa1:
+        if st.button("🏠 Dash", key="qa_dash"):
+            st.session_state["page"] = "Dashboard"
+            do_rerun()
+    with qa2:
+        if st.button("📅 Att", key="qa_att"):
+            st.session_state["page"] = "Attendance"
+            do_rerun()
+    qa3, qa4 = st.sidebar.columns(2)
+    with qa3:
+        if st.button("👤 Emp", key="qa_emp"):
+            st.session_state["page"] = "Employees"
+            do_rerun()
+    with qa4:
+        if st.button("💰 Pay", key="qa_pay"):
+            st.session_state["page"] = "Payroll"
+            do_rerun()
+
     st.sidebar.markdown("### Add Master Data")
 
     st.sidebar.markdown("**➕ Add Project**")
@@ -2041,4 +2069,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
