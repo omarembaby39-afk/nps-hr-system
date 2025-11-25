@@ -1214,7 +1214,16 @@ def assignments_page():
 
 
 def attendance_page():
-    st.header("📅 Global Attendance – Today (with Time In / Out)")
+    st.header("📅 Global Attendance – Any Date (with Time In / Out)")
+
+    # Select date to add / edit attendance
+    att_date = st.date_input(
+        "Select attendance date",
+        value=TODAY,
+        help="Choose any past or future day to add or modify attendance",
+    )
+    att_date_str = att_date.isoformat()
+
 
     conn = get_connection()
     workers = pd.read_sql("SELECT * FROM workers ORDER BY name", conn)
@@ -1243,7 +1252,7 @@ def attendance_page():
                 ORDER BY id DESC LIMIT 1
                 """,
                 conn,
-                params=(w["id"], TODAY.isoformat()),
+                params=(w["id"], att_date_str),
             )
             conn.close()
 
@@ -1297,7 +1306,7 @@ def attendance_page():
             toggle_attendance(
                 w["id"],
                 proj_id,
-                TODAY.isoformat(),
+                att_date_str,
                 int(present),
                 t_in.strftime("%H:%M"),
                 t_out.strftime("%H:%M"),
