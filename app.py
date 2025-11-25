@@ -1936,32 +1936,6 @@ def main():
     )
     st.session_state["page"] = selected_page
 
-    st.sidebar.markdown("### Quick Actions")
-    qa1, qa2 = st.sidebar.columns(2)
-    with qa1:
-        if st.button("🏠 Dash", key="qa_dash"):
-            st.session_state["page"] = "Dashboard"
-            st.session_state["main_menu"] = "Dashboard"
-            do_rerun()
-    with qa2:
-        if st.button("📅 Att", key="qa_att"):
-            st.session_state["page"] = "Attendance"
-            st.session_state["main_menu"] = "Attendance"
-            do_rerun()
-
-    qa3, qa4 = st.sidebar.columns(2)
-    with qa3:
-        if st.button("👤 Emp", key="qa_emp"):
-            st.session_state["page"] = "Employees"
-            st.session_state["main_menu"] = "Employees"
-            do_rerun()
-    with qa4:
-        if st.button("💰 Pay", key="qa_pay"):
-            st.session_state["page"] = "Payroll"
-            st.session_state["main_menu"] = "Payroll"
-            do_rerun()
-
-    st.sidebar.markdown("### Add Master Data")
 
     st.sidebar.markdown("**➕ Add Project**")
     proj_name = st.sidebar.text_input("Project Name", key="sb_proj_name")
@@ -2074,4 +2048,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
