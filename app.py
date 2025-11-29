@@ -1765,10 +1765,10 @@ The app stores:
 
 **Recommended setup (OneDrive shared folder):**
 
-1. On one PC, create folder: `C:\\Users\\<username>\\OneDrive\\NPS_HR_DATA`
+1. On one PC, create folder: `C:\\Users\\<username>\\OneDrive\\NPS_HR_DATA`  
 2. Put `hr.db` and `photos` in this OneDrive folder.  
-3. Install this app on all HR PCs.
-4. Point all PCs to the **same** OneDrive folder.
+3. Install this app on all HR PCs.  
+4. Point all PCs to the **same** OneDrive folder.  
 5. All HR users will see the same data.
         """
     )
@@ -1809,33 +1809,33 @@ The app stores:
         """
 ### How to move existing data (step by step)
 
-1. Close the HR app.
-2. Go to your old data folder (for example `D:\\NileHR\\app\\data`).
+1. Close the HR app.  
+2. Go to your old data folder (for example `D:\\NileHR\\app\\data`).  
 3. Copy:
    - `hr.db`   → into your new data folder  
-   - `photos`  → into your new data folder
-4. Open the HR app again.
-5. In **Settings**, set the data path to that folder (if not already).
+   - `photos`  → into your new data folder  
+4. Open the HR app again.  
+5. In **Settings**, set the data path to that folder (if not already).  
 6. Confirm that employees, projects, attendance, and photos appear correctly.
         """
     )
 
 
-# ===================== ACCOUNTING SYNC – EXPORT / IMPORT =====================
+# ===================== ACCOUNTING SYNC – EXPORT / IMPORT (CSV VERSION) =====================
 def accounting_sync_page():
     """
-    Export HR master data (employees + projects) to Excel
-    in a **fixed format** for the Accounting system.
+    Export HR master data (employees + projects) to CSV
+    in a fixed format for the Accounting system.
 
-    Also optional Import back from Excel (if Accounting becomes the master).
+    Also optional Import back from CSV (if Accounting becomes the master).
     """
-    st.header("🔄 Accounting Sync – Export / Import Master Data")
+    st.header("🔄 Accounting Sync – Export / Import Master Data (CSV)")
 
     st.markdown(
         """
 Use this page to **synchronize HR master data** with the **Accounting System**.
 
-- **Export** → HR ➜ Accounting (Excel files to upload into accounting DB)  
+- **Export** → HR ➜ Accounting (CSV files to upload into accounting DB)  
 - **Import (optional)** → Accounting ➜ HR (if accounting sends back updated master lists)
 
 All exported files use a **stable column structure** so that the accounting DB can
@@ -1873,37 +1873,30 @@ read them directly without manual editing.
     conn.close()
 
     # ==================== EXPORT SECTION ====================
-    st.subheader("📤 Export for Accounting")
+    st.subheader("📤 Export for Accounting (CSV)")
 
     col_emp, col_proj = st.columns(2)
 
     # ----- Export Employees -----
     with col_emp:
-        st.markdown("#### Employees → `employees_for_accounting.xlsx`")
+        st.markdown("#### Employees → `employees_for_accounting.csv`")
 
         if df_emp.empty:
             st.info("No employees in the database to export.")
         else:
-            # Create Excel file in memory
-            emp_buf = io.BytesIO()
-            with pd.ExcelWriter(emp_buf, engine="openpyxl") as writer:
-                df_emp.to_excel(writer, index=False, sheet_name="Employees")
-            emp_buf.seek(0)
+            emp_csv = df_emp.to_csv(index=False).encode("utf-8")
 
             st.download_button(
-                "⬇️ Download Employees Excel",
-                data=emp_buf.getvalue(),
-                file_name="employees_for_accounting.xlsx",
-                mime=(
-                    "application/vnd.openxmlformats-officedocument."
-                    "spreadsheetml.sheet"
-                ),
+                "⬇️ Download Employees CSV",
+                data=emp_csv,
+                file_name="employees_for_accounting.csv",
+                mime="text/csv",
                 help="Upload this file into the Accounting System employee master.",
             )
 
             st.caption(
                 """
-**Columns in employees_for_accounting.xlsx**
+**Columns in employees_for_accounting.csv**
 
 - `id` – internal HR numeric ID  
 - `worker_code` – NPS-Wxxxx (key for badges, reports, and accounting)  
@@ -1918,30 +1911,24 @@ read them directly without manual editing.
 
     # ----- Export Projects -----
     with col_proj:
-        st.markdown("#### Projects → `projects_for_accounting.xlsx`")
+        st.markdown("#### Projects → `projects_for_accounting.csv`")
 
         if df_proj.empty:
             st.info("No projects in the database to export.")
         else:
-            proj_buf = io.BytesIO()
-            with pd.ExcelWriter(proj_buf, engine="openpyxl") as writer:
-                df_proj.to_excel(writer, index=False, sheet_name="Projects")
-            proj_buf.seek(0)
+            proj_csv = df_proj.to_csv(index=False).encode("utf-8")
 
             st.download_button(
-                "⬇️ Download Projects Excel",
-                data=proj_buf.getvalue(),
-                file_name="projects_for_accounting.xlsx",
-                mime=(
-                    "application/vnd.openxmlformats-officedocument."
-                    "spreadsheetml.sheet"
-                ),
+                "⬇️ Download Projects CSV",
+                data=proj_csv,
+                file_name="projects_for_accounting.csv",
+                mime="text/csv",
                 help="Upload this file into the Accounting System project master.",
             )
 
             st.caption(
                 """
-**Columns in projects_for_accounting.xlsx**
+**Columns in projects_for_accounting.csv**
 
 - `id` – internal HR numeric ID  
 - `name` – project name (Um Qasr FM, Baghdad PH2, etc.)  
@@ -1952,14 +1939,12 @@ read them directly without manual editing.
     st.markdown("---")
 
     # ==================== OPTIONAL IMPORT SECTION ====================
-    st.subheader("📥 Optional Import from Accounting (back to HR)")
+    st.subheader("📥 Optional Import from Accounting (CSV back to HR)")
 
     st.markdown(
         """
 Only use this if **Accounting** sends back a master list which should **overwrite**
 or **update** the HR database.
-
-Recommended usage:
 
 - If HR is the **master** → use **Export only** (ignore Import).  
 - If Accounting becomes the **master** → you may use Import to sync back.
@@ -1968,18 +1953,18 @@ Recommended usage:
 
     tab_emp, tab_proj = st.tabs(["Import Employees", "Import Projects"])
 
-    # ----- IMPORT EMPLOYEES -----
+    # ----- IMPORT EMPLOYEES (CSV) -----
     with tab_emp:
-        st.markdown("Upload `employees_for_accounting.xlsx` (or updated version).")
+        st.markdown("Upload `employees_for_accounting.csv` (or updated version).")
         emp_up = st.file_uploader(
-            "Excel file for Employees (same structure as export)",
-            type=["xlsx"],
+            "CSV file for Employees (same structure as export)",
+            type=["csv"],
             key="imp_emp_accounting",
         )
 
         if emp_up is not None:
             try:
-                df_new_emp = pd.read_excel(emp_up)
+                df_new_emp = pd.read_csv(emp_up)
 
                 required_cols = {
                     "id",
@@ -2003,24 +1988,41 @@ Recommended usage:
 
                     # We will upsert by worker_code (if exists → update, else insert)
                     for _, r in df_new_emp.iterrows():
-                        worker_code = str(r["worker_code"]).strip() if r["worker_code"] else None
-                        name = str(r["name"]).strip() if r["name"] else ""
+                        worker_code = (
+                            str(r["worker_code"]).strip()
+                            if pd.notna(r["worker_code"])
+                            else None
+                        )
+                        name = (
+                            str(r["name"]).strip()
+                            if pd.notna(r["name"])
+                            else ""
+                        )
                         if not name:
                             # Skip empty row
                             continue
 
-                        role = str(r["role"]).strip() if r["role"] else ""
-                        trade = str(r["trade"]).strip() if r["trade"] else ""
-                        phone = str(r["phone"]).strip() if r["phone"] else ""
+                        role = (
+                            str(r["role"]).strip()
+                            if pd.notna(r["role"])
+                            else ""
+                        )
+                        trade = (
+                            str(r["trade"]).strip()
+                            if pd.notna(r["trade"])
+                            else ""
+                        )
+                        phone = (
+                            str(r["phone"]).strip()
+                            if pd.notna(r["phone"])
+                            else ""
+                        )
                         salary_val = float(r["salary"] or 0)
+
                         visa_val = None
-                        if not pd.isna(r["visa_expiry"]):
+                        if pd.notna(r["visa_expiry"]):
                             try:
-                                # Already a date or string convertible to isoformat
-                                if isinstance(r["visa_expiry"], (datetime, date)):
-                                    visa_val = r["visa_expiry"].date().isoformat()
-                                else:
-                                    visa_val = str(r["visa_expiry"])[:10]
+                                visa_val = str(r["visa_expiry"])[:10]
                             except Exception:
                                 visa_val = None
 
@@ -2030,11 +2032,11 @@ Recommended usage:
                                 "SELECT id FROM workers WHERE worker_code=?",
                                 (worker_code,),
                             )
-                            row = cur.fetchone()
+                            row_db = cur.fetchone()
                         else:
-                            row = None
+                            row_db = None
 
-                        if row:
+                        if row_db:
                             # UPDATE existing
                             cur.execute(
                                 """
@@ -2081,7 +2083,9 @@ Recommended usage:
 
                     conn.commit()
                     conn.close()
-                    st.success("Employees imported / updated successfully from Accounting.")
+                    st.success(
+                        "Employees imported / updated successfully from Accounting (CSV)."
+                    )
                     st.info("Reload the page to see updated data.")
                     if st.button("🔁 Refresh now"):
                         do_rerun()
@@ -2089,18 +2093,18 @@ Recommended usage:
             except Exception as e:
                 st.error(f"Import error for employees: {e}")
 
-    # ----- IMPORT PROJECTS -----
+    # ----- IMPORT PROJECTS (CSV) -----
     with tab_proj:
-        st.markdown("Upload `projects_for_accounting.xlsx` (or updated version).")
+        st.markdown("Upload `projects_for_accounting.csv` (or updated version).")
         proj_up = st.file_uploader(
-            "Excel file for Projects (same structure as export)",
-            type=["xlsx"],
+            "CSV file for Projects (same structure as export)",
+            type=["csv"],
             key="imp_proj_accounting",
         )
 
         if proj_up is not None:
             try:
-                df_new_proj = pd.read_excel(proj_up)
+                df_new_proj = pd.read_csv(proj_up)
 
                 required_cols = {"id", "name", "held"}
                 missing = required_cols.difference(df_new_proj.columns)
@@ -2114,25 +2118,31 @@ Recommended usage:
                     cur = conn.cursor()
 
                     for _, r in df_new_proj.iterrows():
-                        name = str(r["name"]).strip() if r["name"] else ""
+                        name = (
+                            str(r["name"]).strip()
+                            if pd.notna(r["name"])
+                            else ""
+                        )
                         if not name:
                             continue
                         held_val = int(r["held"] or 0)
 
                         # Check by id first; if not present, check by name
                         pid = None
-                        if not pd.isna(r["id"]):
+                        if pd.notna(r["id"]):
                             try:
                                 pid = int(r["id"])
                             except Exception:
                                 pid = None
 
-                        row = None
+                        row_db = None
                         if pid is not None:
-                            cur.execute("SELECT id FROM projects WHERE id=?", (pid,))
-                            row = cur.fetchone()
+                            cur.execute(
+                                "SELECT id FROM projects WHERE id=?", (pid,)
+                            )
+                            row_db = cur.fetchone()
 
-                        if row:
+                        if row_db:
                             cur.execute(
                                 """
                                 UPDATE projects
@@ -2168,7 +2178,9 @@ Recommended usage:
 
                     conn.commit()
                     conn.close()
-                    st.success("Projects imported / updated successfully from Accounting.")
+                    st.success(
+                        "Projects imported / updated successfully from Accounting (CSV)."
+                    )
                     st.info("Reload the page to see updated data.")
                     if st.button("🔁 Refresh now", key="refresh_proj"):
                         do_rerun()
@@ -2280,7 +2292,7 @@ def main():
         "Attendance",
         "Reports",
         "Payroll",
-        "Accounting Sync",   # NEW PAGE FOR ACCOUNTING EXPORT / IMPORT
+        "Accounting Sync",   # NEW PAGE
         "Database",
         "Settings",
         "Help / About",
