@@ -2302,8 +2302,7 @@ selected_page = st.sidebar.radio("Main Menu", pages)
 
 if selected_page != st.session_state.get("page"):
     st.session_state["page"] = selected_page
-    st.experimental_rerun()
-
+    do_rerun()
     # ----- QUICK ADD EMPLOYEE IN SIDEBAR -----
     st.sidebar.markdown("---")
     st.sidebar.subheader("➕ Quick Add Employee")
@@ -2396,5 +2395,6 @@ if selected_page != st.session_state.get("page"):
 
 if __name__ == "__main__":
     main()
+
 
 
