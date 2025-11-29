@@ -2280,30 +2280,29 @@ def main():
     # Ensure DB exists / patched
     init_db()
 
-    # ----- SIDEBAR NAV -----
-    st.sidebar.title("NPS HR Navigation")
+# ----- SIDEBAR NAV -----
+st.sidebar.title("NPS HR Navigation")
 
-    pages = [
-        "Dashboard",
-        "Projects",
-        "Employees",
-        "Workers",
-        "Assignments",
-        "Attendance",
-        "Reports",
-        "Payroll",
-        "Accounting Sync",   # NEW PAGE
-        "Database",
-        "Settings",
-        "Help / About",
-    ]
+pages = [
+    "Dashboard",
+    "Projects",
+    "Employees",
+    "Workers",
+    "Assignments",
+    "Attendance",
+    "Reports",
+    "Payroll",
+    "Accounting Sync",
+    "Database",
+    "Settings",
+    "Help / About",
+]
 
-    selected_page = st.sidebar.radio(
-        "Main Menu",
-        pages,
-        index=pages.index(st.session_state.get("page", "Dashboard")),
-    )
+selected_page = st.sidebar.radio("Main Menu", pages)
+
+if selected_page != st.session_state.get("page"):
     st.session_state["page"] = selected_page
+    st.experimental_rerun()
 
     # ----- QUICK ADD EMPLOYEE IN SIDEBAR -----
     st.sidebar.markdown("---")
@@ -2397,4 +2396,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
