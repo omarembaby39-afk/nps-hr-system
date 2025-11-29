@@ -1,4 +1,4 @@
-# ===================== NPS HR SYSTEM – FULL APP (WITH FIXES + ACCOUNTING SYNC) =====================
+# ===================== NPS HR SYSTEM – FULL APP (WITH FIXES) =====================
 import streamlit as st
 import sqlite3
 import pandas as pd
@@ -763,44 +763,17 @@ def generate_payslips_batch_pdf(rows, year, month):
     return buf.getvalue()
 
 
-# ===================== PAGES =====================
-
-# ---------- Dashboard (enhanced with visa stats) ----------
+# ===================== PAGES – DASHBOARD, PROJECTS, EMPLOYEES =====================
 def dashboard_page():
     st.header("📊 HR & Project Dashboard – Nile Projects Service Company")
 
     total_workers, present, absent, active_projects, held_projects = get_global_today_stats()
-
-    # Visa stats
-    conn = get_connection()
-    visa_raw = pd.read_sql("SELECT visa_expiry FROM workers", conn)
-    conn.close()
-
-    expiring_soon = 0
-    expired = 0
-    if not visa_raw.empty:
-        for v in visa_raw["visa_expiry"]:
-            if not v:
-                continue
-            try:
-                d = date.fromisoformat(str(v))
-            except Exception:
-                continue
-            if d < TODAY:
-                expired += 1
-            elif d <= TODAY + relativedelta(days=30):
-                expiring_soon += 1
-
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Total Workers", total_workers)
     c2.metric("Present Today", present)
     c3.metric("Absent Today", absent)
     c4.metric("Active Projects", active_projects)
     c5.metric("Held Projects", held_projects)
-    c6.metric("Visa Expiring ≤30 days", expiring_soon)
-
-    if expired > 0:
-        st.warning(f"⚠ يوجد عدد {expired} موظف/عامل فيزتهم منتهية بالفعل – راجع صفحة الموظفين فوراً.")
 
     conn = get_connection()
     projects = pd.read_sql("SELECT * FROM projects", conn)
@@ -824,9 +797,9 @@ def dashboard_page():
         conn,
         params=(TODAY.isoformat(),),
     )
+    conn.close()
 
     if projects.empty:
-        conn.close()
         st.info("No projects yet. Use sidebar to add a project.")
         return
 
@@ -858,8 +831,9 @@ def dashboard_page():
     st.subheader("🔍 Project Details & Workers Today")
 
     if "show_workers_map" not in st.session_state:
-        st.session_state["show_workers_map"] = {}
+        st.session_state.show_workers_map = {}
 
+    conn = get_connection()
     for _, row in projects.iterrows():
         pid = int(row["id"])
         pstats = proj_stats[proj_stats["id"] == pid].iloc[0]
@@ -887,12 +861,12 @@ def dashboard_page():
                 do_rerun()
 
         if st.button("Workers PRESENT today", key=f"view_{pid}"):
-            st.session_state["show_workers_map"][pid] = not st.session_state["show_workers_map"].get(
+            st.session_state.show_workers_map[pid] = not st.session_state.show_workers_map.get(
                 pid, False
             )
             do_rerun()
 
-        if st.session_state["show_workers_map"].get(pid, False):
+        if st.session_state.show_workers_map.get(pid, False):
             w_today = pd.read_sql(
                 """
                 SELECT DISTINCT w.worker_code, w.name, w.role, w.trade,
@@ -914,633 +888,985 @@ def dashboard_page():
 
 
 def projects_page():
-    st.header("🏗 Projects – Add / Edit")
+    st.header("🏗 Projects – Add / Edit (simple)")
 
     conn = get_connection()
     df = pd.read_sql("SELECT id, name, held FROM projects ORDER BY id", conn)
+    conn.close()
 
-    st.caption("Edit project names and held flag. Add new rows at bottom if needed.")
+    st.caption("Edit project names and held status. Add new rows at the bottom.")
     edited = st.data_editor(
         df,
+        key="projects_simple_editor",
         num_rows="dynamic",
         use_container_width=True,
-        key="projects_editor",
+        column_config={
+            "id": st.column_config.NumberColumn("ID", disabled=True),
+            "name": st.column_config.TextColumn("Project Name"),
+            "held": st.column_config.CheckboxColumn("Held"),
+        },
     )
 
-    if st.button("💾 Save Projects"):
-        try:
-            cur = conn.cursor()
-            # Update existing / insert new
-            for _, row in edited.iterrows():
-                name = str(row["name"]).strip() if pd.notna(row["name"]) else ""
-                if not name:
-                    continue
-                held = int(row.get("held", 0) or 0)
-                pid = row.get("id")
-                if pd.isna(pid):
-                    cur.execute("INSERT INTO projects (name, held) VALUES (?, ?)", (name, held))
-                else:
-                    cur.execute(
-                        "UPDATE projects SET name=?, held=? WHERE id=?",
-                        (name, held, int(pid)),
-                    )
-            conn.commit()
-            st.success("Projects saved.")
-            do_rerun()
-        except Exception as e:
-            st.error(f"Error saving projects: {e}")
-        finally:
-            conn.close()
-    else:
+    if st.button("Save Project Changes (simple)"):
+        conn = get_connection()
+        cur = conn.cursor()
+
+        old_ids = set(df["id"].tolist())
+        new_ids = set()
+
+        for _, row in edited.iterrows():
+            pid = row.get("id")
+            name = str(row.get("name") or "").strip()
+            held = int(bool(row.get("held")))
+            if not name:
+                continue
+            if pd.isna(pid):
+                cur.execute(
+                    "INSERT INTO projects (name, held) VALUES (?, ?)",
+                    (name, held),
+                )
+            else:
+                pid = int(pid)
+                new_ids.add(pid)
+                cur.execute(
+                    "UPDATE projects SET name=?, held=? WHERE id=?",
+                    (name, held, pid),
+                )
+
+        ids_to_delete = old_ids - new_ids
+        for pid in ids_to_delete:
+            pid = int(pid)
+            cur.execute("DELETE FROM project_workers WHERE project_id=?", (pid,))
+            cur.execute("DELETE FROM attendance WHERE project_id=?", (pid,))
+            cur.execute("DELETE FROM projects WHERE id=?", (pid,))
+
+        conn.commit()
         conn.close()
+        st.success("Projects updated.")
+        do_rerun()
 
 
 def employees_page():
-    st.header("👥 Employees – List & ID Cards")
-
+    st.header("👤 Employees – Master Data & ID Cards")
     conn = get_connection()
-    df = pd.read_sql(
-        """
-        SELECT id, worker_code, name, role, trade, salary, visa_expiry, phone, photo_file
-        FROM workers
-        ORDER BY worker_code
-        """,
-        conn,
-    )
+    workers = pd.read_sql("SELECT * FROM workers ORDER BY name", conn)
     conn.close()
 
-    if df.empty:
-        st.info("No employees yet. Use sidebar to add employee.")
+    if workers.empty:
+        st.info("No employees yet. Use sidebar ➕ Add Employee.")
         return
 
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        st.subheader("Employees Table")
-        st.dataframe(
-            df[
-                [
-                    "worker_code",
-                    "name",
-                    "role",
-                    "trade",
-                    "salary",
-                    "visa_expiry",
-                    "phone",
-                ]
-            ],
-            use_container_width=True,
-            height=400,
-        )
+    left, right = st.columns([1.7, 1.3])
 
-    with col2:
-        st.subheader("ID Card Preview")
-        selected_code = st.selectbox(
-            "Select Employee",
-            df["worker_code"].tolist(),
+    with left:
+        df = workers[
+            ["worker_code", "name", "role", "trade", "salary", "phone", "visa_expiry"]
+        ].copy()
+        df = df.rename(
+            columns={
+                "worker_code": "Worker ID",
+                "name": "Name",
+                "role": "Role",
+                "trade": "Trade",
+                "salary": "Salary",
+                "phone": "Phone",
+                "visa_expiry": "Visa Expiry",
+            }
         )
-        worker_row = df[df["worker_code"] == selected_code].iloc[0]
+        st.subheader("Employee List")
+        st.dataframe(df, use_container_width=True, height=400)
+
+        options = []
+        id_map = {}
+        for _, r in workers.iterrows():
+            code = r["worker_code"] or f"NPS-W{r['id']:04d}"
+            label = f"{code} – {r['name']}"
+            options.append(label)
+            id_map[label] = int(r["id"])
+
+        selected_label = st.selectbox("Select employee to edit / ID card", options)
+        selected_id = id_map[selected_label]
+
+    with right:
+        worker_row = workers[workers["id"] == selected_id].iloc[0]
+        st.subheader("ID Card Preview")
         render_id_card(worker_row)
 
         if REPORTLAB_AVAILABLE:
             pdf_bytes = generate_id_card_pdf(worker_row)
-            if pdf_bytes:
-                st.download_button(
-                    "⬇️ Download ID Card PDF",
-                    data=pdf_bytes,
-                    file_name=f"{worker_row['worker_code']}_id_card.pdf",
-                    mime="application/pdf",
-                )
+            st.download_button(
+                "📄 Download ID Card PDF",
+                data=pdf_bytes,
+                file_name=f"{worker_row['worker_code'] or 'ID'}.pdf",
+                mime="application/pdf",
+            )
         else:
-            st.info("To enable ID card PDF export: `pip install reportlab`")
+            st.info("To export ID card to PDF: `pip install reportlab`")
+
+        st.markdown("---")
+        st.subheader("Edit Employee (single)")
+
+        with st.form(f"edit_emp_{selected_id}"):
+            name = st.text_input("Name", worker_row["name"])
+            role = st.text_input("Role", worker_row.get("role") or "")
+            trade = st.text_input("Trade", worker_row.get("trade") or "")
+            salary = float(worker_row.get("salary") or 0)
+            salary = st.number_input("Basic Salary", value=salary, min_value=0.0, step=100.0)
+            phone = st.text_input("Phone", worker_row.get("phone") or "")
+
+            try:
+                visa_default = (
+                    date.fromisoformat(worker_row["visa_expiry"])
+                    if worker_row.get("visa_expiry")
+                    else TODAY
+                )
+            except Exception:
+                visa_default = TODAY
+            visa = st.date_input("Visa Expiry", value=visa_default)
+
+            photo = st.file_uploader(
+                "Replace Photo (optional)", type=["png", "jpg", "jpeg"], key=f"photo_{selected_id}"
+            )
+
+            submitted = st.form_submit_button("Save Changes")
+
+        if submitted:
+            photo_file = worker_row.get("photo_file")
+            if photo is not None:
+                if photo_file:
+                    old = os.path.join(PHOTOS_DIR, photo_file)
+                    if os.path.exists(old):
+                        try:
+                            os.remove(old)
+                        except Exception:
+                            pass
+                code = worker_row["worker_code"] or f"NPS-W{worker_row['id']:04d}"
+                _, ext = os.path.splitext(photo.name)
+                if ext.lower() not in [".png", ".jpg", ".jpeg"]:
+                    ext = ".png"
+                photo_file = f"{code}{ext}"
+                with open(os.path.join(PHOTOS_DIR, photo_file), "wb") as f:
+                    f.write(photo.getbuffer())
+
+            conn = get_connection()
+            conn.execute(
+                """
+                UPDATE workers
+                SET name=?, role=?, trade=?, salary=?, visa_expiry=?, photo_file=?, phone=?
+                WHERE id=?
+                """,
+                (
+                    name.strip(),
+                    role.strip(),
+                    trade.strip(),
+                    salary,
+                    visa.isoformat(),
+                    photo_file,
+                    phone.strip(),
+                    selected_id,
+                ),
+            )
+            conn.commit()
+            conn.close()
+            st.success("Employee updated.")
+            do_rerun()
 
 
+# ===================== WORKERS, ASSIGNMENTS, ATTENDANCE =====================
 def workers_page():
-    st.header("👷 Workers – Quick Editor")
+    st.header("👷 Workers by Project")
 
     conn = get_connection()
-    df = pd.read_sql(
-        "SELECT id, worker_code, name, role, trade, salary, visa_expiry, phone FROM workers ORDER BY id",
+    projects = pd.read_sql("SELECT id, name FROM projects ORDER BY name", conn)
+    conn.close()
+    if projects.empty:
+        st.info("No projects. Use Projects or Database page to add.")
+        return
+
+    proj_name = st.selectbox("Select project", projects["name"].tolist())
+    proj_id = int(projects[projects["name"] == proj_name]["id"].iloc[0])
+
+    conn = get_connection()
+    workers = pd.read_sql(
+        """
+        SELECT w.id, w.worker_code, w.name, w.role, w.trade, w.salary, w.visa_expiry
+        FROM workers w
+        JOIN project_workers pw ON w.id=pw.worker_id
+        WHERE pw.project_id=?
+        ORDER BY w.name
+        """,
         conn,
+        params=(proj_id,),
     )
+    conn.close()
+
+    if workers.empty:
+        st.info("No workers assigned to this project yet.")
+        return
+
+    workers["today_att"] = workers["id"].apply(lambda wid: get_today_attendance(wid, proj_id))
+
+    search = st.text_input("Search (ID / Name / Role / Trade)")
+    if search:
+        m = workers["worker_code"].fillna("").str.contains(search, case=False)
+        m |= workers["name"].str.contains(search, case=False)
+        m |= workers["role"].str.contains(search, case=False)
+        m |= workers["trade"].str.contains(search, case=False)
+        workers = workers[m]
+
+    with st.form("proj_att_form"):
+        for _, w in workers.iterrows():
+            c1, c2, c3, c4, c5 = st.columns([1.2, 2, 1.5, 1.5, 1])
+            with c1:
+                st.write(w.get("worker_code") or f"#{w['id']}")
+            with c2:
+                st.write(f"**{w['name']}**")
+            with c3:
+                st.write(w["role"])
+            with c4:
+                _, vlabel, vicon = get_visa_status(w["visa_expiry"])
+                st.write(f"{vicon} {vlabel}")
+            with c5:
+                st.checkbox(
+                    "Present",
+                    value=bool(w["today_att"]),
+                    key=f"proj_{proj_id}_w_{w['id']}",
+                )
+        if st.form_submit_button("Save Attendance (Present only)"):
+            for _, w in workers.iterrows():
+                present = st.session_state[f"proj_{proj_id}_w_{w['id']}"]
+                toggle_attendance(
+                    w["id"], proj_id, TODAY.isoformat(), int(present), time_in="07:00", time_out="16:00"
+                )
+            st.success("Attendance saved for this project.")
+            do_rerun()
+
+
+def assignments_page():
+    st.header("🔗 Worker–Project Assignments")
+
+    conn = get_connection()
+    workers = pd.read_sql("SELECT id, worker_code, name, role, trade FROM workers", conn)
+    projects = pd.read_sql("SELECT id, name FROM projects ORDER BY name", conn)
+    assigned = pd.read_sql("SELECT * FROM project_workers", conn)
+    conn.close()
+
+    if workers.empty or projects.empty:
+        st.info("Need both employees and projects first.")
+        return
+
+    assigned_map = {(r["project_id"], r["worker_id"]): True for _, r in assigned.iterrows()}
+    rows = []
+    for _, w in workers.iterrows():
+        code = w["worker_code"] or f"#{w['id']}"
+        row = {"Worker": f"{code} – {w['name']} ({w['role']}, {w['trade']})"}
+        for _, p in projects.iterrows():
+            row[p["name"]] = assigned_map.get((p["id"], w["id"]), False)
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    st.caption("Tick the projects for each worker, then click Save.")
+
+    column_cfg = {}
+    for _, p in projects.iterrows():
+        pname = p["name"]
+        column_cfg[pname] = st.column_config.CheckboxColumn(
+            label=pname,
+            default=False,
+            help=f"Assign worker to project: {pname}",
+        )
 
     edited = st.data_editor(
         df,
-        num_rows="dynamic",
         use_container_width=True,
-        key="workers_editor",
+        column_config=column_cfg,
+        key="assign_editor",
     )
 
-    if st.button("💾 Save Workers"):
-        try:
+    if st.button("Save Assignments", key="save_assignments_btn"):
+        conn = get_connection()
+        conn.execute("DELETE FROM project_workers")
+
+        for _, row in edited.iterrows():
+            label = row["Worker"]
+            try:
+                name_part = label.split(" – ", 1)[1]
+                worker_name = name_part.split(" (")[0]
+            except Exception:
+                continue
+
+            wid_df = workers[workers["name"] == worker_name]
+            if wid_df.empty:
+                continue
+            wid = int(wid_df["id"].iloc[0])
+
+            for _, p in projects.iterrows():
+                if bool(row[p["name"]]):
+                    conn.execute(
+                        "INSERT OR IGNORE INTO project_workers (project_id, worker_id) VALUES (?, ?)",
+                        (int(p["id"]), wid),
+                    )
+
+        conn.commit()
+        conn.close()
+        st.success("Assignments saved.")
+        do_rerun()
+
+
+def attendance_page():
+    st.header("📅 Global Attendance – Any Date (with Time In / Out)")
+
+    # Select date to add / edit attendance
+    att_date = st.date_input(
+        "Select attendance date",
+        value=TODAY,
+        help="Choose any past or future day to add or modify attendance",
+    )
+    att_date_str = att_date.isoformat()
+
+
+    conn = get_connection()
+    workers = pd.read_sql("SELECT * FROM workers ORDER BY name", conn)
+    projects = pd.read_sql("SELECT id, name FROM projects ORDER BY name", conn)
+    conn.close()
+
+    if workers.empty or projects.empty:
+        st.info("Need employees and projects first.")
+        return
+
+    project_names = projects["name"].tolist()
+
+    with st.form("global_att_form"):
+        for _, w in workers.iterrows():
+            c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
+            with c1:
+                code = w.get("worker_code") or f"#{w['id']}"
+                st.write(f"{code} – {w['name']} ({w['trade']} / {w['role']})")
+
+            conn = get_connection()
+            last = pd.read_sql(
+                """
+                SELECT project_id, signed_in, time_in, time_out
+                FROM attendance
+                WHERE worker_id=? AND att_date=?
+                ORDER BY id DESC LIMIT 1
+                """,
+                conn,
+                params=(w["id"], att_date_str),
+            )
+            conn.close()
+
+            if last.empty:
+                default_proj_id = int(projects["id"].iloc[0])
+                default_present = False
+                default_in = time(7, 0)
+                default_out = time(16, 0)
+            else:
+                default_proj_id = int(last["project_id"].iloc[0])
+                default_present = bool(last["signed_in"].iloc[0])
+                ti = last["time_in"].iloc[0]
+                to = last["time_out"].iloc[0]
+                try:
+                    default_in = datetime.strptime(ti, "%H:%M").time() if ti else time(7, 0)
+                except Exception:
+                    default_in = time(7, 0)
+                try:
+                    default_out = datetime.strptime(to, "%H:%M").time() if to else time(16, 0)
+                except Exception:
+                    default_out = time(16, 0)
+
+            if default_proj_id not in projects["id"].tolist():
+                default_proj_id = int(projects["id"].iloc[0])
+
+            default_proj_name = projects[projects["id"] == default_proj_id]["name"].iloc[0]
+            idx = project_names.index(default_proj_name)
+
+            with c2:
+                proj_name = st.selectbox(
+                    "Project",
+                    project_names,
+                    index=idx,
+                    key=f"proj_{w['id']}",
+                )
+            with c3:
+                t_in = st.time_input("Time In", value=default_in, key=f"ti_{w['id']}")
+                t_out = st.time_input("Time Out", value=default_out, key=f"to_{w['id']}")
+            with c4:
+                st.checkbox("Present", value=default_present, key=f"pre_{w['id']}")
+
+        submitted = st.form_submit_button("Save All")
+
+    if submitted:
+        for _, w in workers.iterrows():
+            proj_name = st.session_state[f"proj_{w['id']}"]
+            proj_id = int(projects[projects["name"] == proj_name]["id"].iloc[0])
+            present = bool(st.session_state[f"pre_{w['id']}"])
+            t_in = st.session_state[f"ti_{w['id']}"]
+            t_out = st.session_state[f"to_{w['id']}"]
+            toggle_attendance(
+                w["id"],
+                proj_id,
+                att_date_str,
+                int(present),
+                t_in.strftime("%H:%M"),
+                t_out.strftime("%H:%M"),
+            )
+        st.success("Attendance saved.")
+        do_rerun()
+
+
+# ===================== REPORTS (NO PAYSLIP DOWNLOAD HERE) =====================
+def reports_page():
+    st.header("📊 Reports – Attendance & Visa")
+
+    choice = st.selectbox(
+        "Select report type",
+        ["Attendance Summary", "Visa Compliance"],
+    )
+
+    if choice == "Attendance Summary":
+        c1, c2 = st.columns(2)
+        with c1:
+            year = int(
+                st.number_input("Year", min_value=2000, max_value=2100, value=TODAY.year)
+            )
+        with c2:
+            month = int(st.number_input("Month", min_value=1, max_value=12, value=TODAY.month))
+
+        month_start = date(year, month, 1)
+        month_end = date(year + (month // 12), (month % 12) + 1, 1)
+
+        conn = get_connection()
+        att = pd.read_sql(
+            """
+            SELECT w.worker_code, w.name, w.trade, p.name AS project,
+                   a.att_date, a.signed_in, a.time_in, a.time_out
+            FROM workers w
+            JOIN attendance a ON w.id=a.worker_id
+            LEFT JOIN projects p ON a.project_id=p.id
+            WHERE a.att_date>=? AND a.att_date<?
+            ORDER BY a.att_date DESC, w.name
+            """,
+            conn,
+            params=(month_start.isoformat(), month_end.isoformat()),
+        )
+        conn.close()
+
+        if att.empty:
+            st.info("No attendance for this month.")
+            return
+
+        att["hours"] = att.apply(lambda r: _hours_between(r["time_in"], r["time_out"]), axis=1)
+        att["ot_hours"] = att["hours"].apply(lambda h: max(h - STANDARD_DAILY_HOURS, 0.0))
+        att["Status"] = att["signed_in"].map({1: "Present", 0: "Absent"})
+
+        tab1, tab2 = st.tabs(["Daily Records", "Monthly Summary by Worker"])
+        with tab1:
+            ddf = att.rename(
+                columns={
+                    "worker_code": "Worker ID",
+                    "name": "Name",
+                    "trade": "Trade",
+                    "project": "Project",
+                    "att_date": "Date",
+                    "time_in": "Time In",
+                    "time_out": "Time Out",
+                    "hours": "Hours",
+                    "ot_hours": "Overtime (hrs)",
+                }
+            )[
+                [
+                    "Worker ID",
+                    "Name",
+                    "Trade",
+                    "Project",
+                    "Date",
+                    "Status",
+                    "Time In",
+                    "Time Out",
+                    "Hours",
+                    "Overtime (hrs)",
+                ]
+            ]
+            st.dataframe(ddf, use_container_width=True)
+            st.download_button(
+                "Download Daily CSV",
+                data=ddf.to_csv(index=False),
+                file_name=f"attendance_daily_{year}_{month:02d}.csv",
+                mime="text/csv",
+            )
+
+        with tab2:
+            payroll_df = generate_monthly_payroll(year, month)
+            if payroll_df is None or payroll_df.empty:
+                st.info("No payroll data.")
+            else:
+                st.markdown(
+                    f"""
+                    <div style="
+                        border-radius:12px;
+                        padding:10px 16px;
+                        margin-bottom:12px;
+                        background-color:rgba(14,165,233,0.12);
+                        border:1px solid rgba(56,189,248,0.5);
+                    ">
+                        <span style="color:{BRAND_LIGHT_BLUE};font-weight:600;">
+                            Company Payroll Summary – {year}-{month:02d}
+                        </span>
+                        <span style="color:#e5e7eb;font-size:12px;margin-left:4px;">
+                            (Details & payslips from Payroll page)
+                        </span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                st.dataframe(payroll_df, use_container_width=True)
+                st.metric(
+                    "Total Company Payroll (Net)",
+                    f"{payroll_df['net_pay'].sum():,.2f} QAR",
+                )
+                st.download_button(
+                    "Download Monthly Summary CSV",
+                    data=payroll_df.to_csv(index=False),
+                    file_name=f"attendance_summary_{year}_{month:02d}.csv",
+                    mime="text/csv",
+                )
+
+    else:
+        conn = get_connection()
+        visa_df = pd.read_sql(
+            "SELECT worker_code, name, role, trade, visa_expiry FROM workers", conn
+        )
+        conn.close()
+        visa_df["Visa Status"] = visa_df["visa_expiry"].apply(lambda x: get_visa_status(x)[1])
+        visa_df = visa_df.rename(
+            columns={
+                "worker_code": "Worker ID",
+                "name": "Name",
+                "role": "Role",
+                "trade": "Trade",
+                "visa_expiry": "Visa Expiry",
+            }
+        )
+        st.dataframe(visa_df, use_container_width=True)
+        st.download_button(
+            "Download Visa CSV",
+            data=visa_df.to_csv(index=False),
+            file_name="visa_compliance.csv",
+            mime="text/csv",
+        )
+
+
+# ===================== PAYROLL PAGE (A5 SLIPS, BATCH) =====================
+def payroll_page():
+    st.header("💰 Payroll & Payslips – Nile Projects Service Company")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        year = int(
+            st.number_input(
+                "Year",
+                min_value=2000,
+                max_value=2100,
+                value=TODAY.year,
+                key="pay_year",
+            )
+        )
+    with c2:
+        month = int(
+            st.number_input(
+                "Month",
+                min_value=1,
+                max_value=12,
+                value=TODAY.month,
+                key="pay_month",
+            )
+        )
+
+    conn = get_connection()
+    projects = pd.read_sql("SELECT id, name FROM projects ORDER BY name", conn)
+    conn.close()
+    options = ["All Projects"]
+    id_map = {"All Projects": None}
+    for _, p in projects.iterrows():
+        options.append(p["name"])
+        id_map[p["name"]] = int(p["id"])
+
+    scope = st.selectbox("Scope", options)
+    project_id = id_map[scope]
+
+    if "payroll_df" not in st.session_state:
+        st.session_state.payroll_df = None
+
+    if st.button("Generate Payroll", key="btn_gen_payroll"):
+        payroll_df = generate_monthly_payroll(year, month, project_id=project_id)
+        if payroll_df is None or payroll_df.empty:
+            st.info("No payroll for this period / project.")
+            st.session_state.payroll_df = None
+        else:
+            st.session_state.payroll_df = payroll_df
+
+    payroll_df = st.session_state.payroll_df
+    if payroll_df is not None and not payroll_df.empty:
+        scope_label = "All Projects" if project_id is None else scope
+        st.markdown(
+            f"""
+            <div style="
+                border-radius:12px;
+                padding:10px 16px;
+                margin-bottom:12px;
+                background-color:rgba(14,165,233,0.12);
+                border:1px solid rgba(56,189,248,0.5);
+            ">
+                <span style="color:{BRAND_LIGHT_BLUE};font-weight:600;">
+                    Payroll – {scope_label} – {year}-{month:02d}
+                </span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.dataframe(payroll_df, use_container_width=True)
+        total_net = payroll_df["net_pay"].sum()
+        st.metric(f"Total Net Payroll – {scope_label}", f"{total_net:,.2f} QAR")
+
+        scope_tag = "all" if project_id is None else f"proj_{project_id}"
+        st.download_button(
+            "Download Payroll CSV",
+            data=payroll_df.to_csv(index=False),
+            file_name=f"payroll_{year}_{month:02d}_{scope_tag}.csv",
+            mime="text/csv",
+        )
+
+        if REPORTLAB_AVAILABLE:
+            codes = payroll_df["worker_code"].tolist()
+            labels = [
+                f"{c} – {n}"
+                for c, n in zip(payroll_df["worker_code"], payroll_df["name"])
+            ]
+
+            sel_single = st.selectbox("Print single salary slip (A5)", labels, key="slip_single_sel")
+            sel_code = sel_single.split(" – ", 1)[0]
+            sel_row_df = payroll_df[payroll_df["worker_code"] == sel_code]
+            if not sel_row_df.empty:
+                sel_row = sel_row_df.iloc[0]
+                pdf_single = generate_payslip_pdf(sel_row, year, month)
+                st.download_button(
+                    "Download Single Payslip PDF (A5)",
+                    data=pdf_single,
+                    file_name=f"payslip_{sel_code}_{year}_{month:02d}.pdf",
+                    mime="application/pdf",
+                )
+
+            st.markdown("### Batch slips (up to 5 employees)")
+            sel_multi = st.multiselect(
+                "Select employees for batch A5 PDF",
+                labels,
+                max_selections=5,
+                key="slip_multi_sel",
+            )
+            if sel_multi:
+                chosen_codes = [s.split(" – ", 1)[0] for s in sel_multi]
+                batch_rows = []
+                for cd in chosen_codes:
+                    rdf = payroll_df[payroll_df["worker_code"] == cd]
+                    if not rdf.empty:
+                        batch_rows.append(rdf.iloc[0])
+                if batch_rows:
+                    pdf_batch = generate_payslips_batch_pdf(batch_rows, year, month)
+                    st.download_button(
+                        "Download Batch Payslips PDF (A5 pages)",
+                        data=pdf_batch,
+                        file_name=f"payslips_batch_{year}_{month:02d}.pdf",
+                        mime="application/pdf",
+                    )
+        else:
+            st.info("To export payslip PDFs: `pip install reportlab`")
+
+
+# ===================== DATABASE PAGE (EDIT PROJECTS & EMPLOYEES) =====================
+def database_page():
+    st.header("🗄 Database – Projects & Employees")
+
+    tab_projects, tab_emps = st.tabs(["Projects", "Employees"])
+
+    # ----- PROJECTS TAB -----
+    with tab_projects:
+        st.subheader("Projects Database")
+
+        conn = get_connection()
+        df_proj = pd.read_sql("SELECT id, name, held FROM projects ORDER BY id", conn)
+        conn.close()
+
+        st.caption("Edit names / Held, add rows, delete rows. Then click Save.")
+        edited_proj = st.data_editor(
+            df_proj,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="projects_db_editor",
+            column_config={
+                "id": st.column_config.NumberColumn("ID", disabled=True),
+                "name": st.column_config.TextColumn("Project Name"),
+                "held": st.column_config.CheckboxColumn("Held"),
+            },
+        )
+
+        if st.button("Save Projects Database"):
+            conn = get_connection()
             cur = conn.cursor()
-            for _, row in edited.iterrows():
-                name = str(row["name"]).strip() if pd.notna(row["name"]) else ""
+
+            old_ids = set(df_proj["id"].tolist())
+            new_ids = set()
+
+            for _, row in edited_proj.iterrows():
+                pid = row.get("id")
+                name = str(row.get("name") or "").strip()
+                held = int(bool(row.get("held")))
+
                 if not name:
                     continue
-                worker_code = (
-                    str(row["worker_code"]).strip()
-                    if pd.notna(row["worker_code"])
-                    else None
-                )
-                if not worker_code:
-                    worker_code = generate_next_worker_code()
-                role = str(row.get("role", "") or "")
-                trade = str(row.get("trade", "") or "")
-                phone = str(row.get("phone", "") or "")
-                salary_val = float(row.get("salary", 0) or 0)
-                visa_val = None
-                if pd.notna(row.get("visa_expiry")):
-                    visa_val = str(row["visa_expiry"])[:10]
 
+                if pd.isna(pid):
+                    cur.execute(
+                        "INSERT INTO projects (name, held) VALUES (?, ?)",
+                        (name, held),
+                    )
+                else:
+                    pid = int(pid)
+                    new_ids.add(pid)
+                    cur.execute(
+                        "UPDATE projects SET name=?, held=? WHERE id=?",
+                        (name, held, pid),
+                    )
+
+            ids_to_delete = old_ids - new_ids
+            for pid in ids_to_delete:
+                pid = int(pid)
+                cur.execute("DELETE FROM project_workers WHERE project_id=?", (pid,))
+                cur.execute("DELETE FROM attendance WHERE project_id=?", (pid,))
+                cur.execute("DELETE FROM projects WHERE id=?", (pid,))
+
+            conn.commit()
+            conn.close()
+            st.success("Projects database updated.")
+            do_rerun()
+
+    # ----- EMPLOYEES TAB -----
+    with tab_emps:
+        st.subheader("Employees Database")
+
+        conn = get_connection()
+        df_emp = pd.read_sql(
+            "SELECT id, worker_code, name, role, trade, salary, visa_expiry, phone FROM workers ORDER BY id",
+            conn,
+        )
+        conn.close()
+
+        st.caption(
+            "Edit employee data, add new rows, or delete rows. "
+            "Blank / removed rows will delete that employee."
+        )
+
+        edited_emp = st.data_editor(
+            df_emp,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="emp_db_editor",
+            column_config={
+                "id": st.column_config.NumberColumn("ID", disabled=True),
+                "worker_code": st.column_config.TextColumn("Worker Code"),
+                "name": st.column_config.TextColumn("Name"),
+                "role": st.column_config.TextColumn("Role"),
+                "trade": st.column_config.TextColumn("Trade"),
+                "salary": st.column_config.NumberColumn("Salary"),
+                "visa_expiry": st.column_config.TextColumn("Visa Expiry (YYYY-MM-DD)"),
+                "phone": st.column_config.TextColumn("Phone"),
+            },
+        )
+
+        if st.button("Save Employees Database"):
+            conn = get_connection()
+            cur = conn.cursor()
+
+            old_ids = set(df_emp["id"].tolist())
+            new_ids = set()
+
+            for _, row in edited_emp.iterrows():
                 wid = row.get("id")
+                name = str(row.get("name") or "").strip()
+
+                if not name:
+                    continue
+
+                worker_code = str(row.get("worker_code") or "").strip()
+                role = str(row.get("role") or "").strip()
+                trade = str(row.get("trade") or "").strip()
+                salary = float(row.get("salary") or 0)
+                phone = str(row.get("phone") or "").strip()
+                v = row.get("visa_expiry")
+
+                visa = None
+                if v not in (None, "", "NaT"):
+                    try:
+                        if isinstance(v, (datetime, date)):
+                            visa = v.isoformat()
+                        else:
+                            visa = str(v)
+                    except Exception:
+                        visa = None
+
                 if pd.isna(wid):
+                    if not worker_code:
+                        worker_code = generate_next_worker_code()
                     cur.execute(
                         """
                         INSERT INTO workers (worker_code, name, role, trade, salary, visa_expiry, phone)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
-                        (worker_code, name, role, trade, salary_val, visa_val, phone),
+                        (worker_code, name, role, trade, salary, visa, phone),
                     )
                 else:
+                    wid = int(wid)
+                    new_ids.add(wid)
                     cur.execute(
                         """
                         UPDATE workers
-                           SET worker_code=?,
-                               name=?,
-                               role=?,
-                               trade=?,
-                               salary=?,
-                               visa_expiry=?,
-                               phone=?
-                         WHERE id=?
+                        SET worker_code=?, name=?, role=?, trade=?, salary=?, visa_expiry=?, phone=?
+                        WHERE id=?
                         """,
-                        (worker_code, name, role, trade, salary_val, visa_val, phone, int(wid)),
+                        (worker_code, name, role, trade, salary, visa, phone, wid),
                     )
+
+            ids_to_delete = old_ids - new_ids
+            for wid in ids_to_delete:
+                wid = int(wid)
+                cur.execute("DELETE FROM project_workers WHERE worker_id=?", (wid,))
+                cur.execute("DELETE FROM attendance WHERE worker_id=?", (wid,))
+                cur.execute("DELETE FROM workers WHERE id=?", (wid,))
+
             conn.commit()
-            st.success("Workers saved.")
-            do_rerun()
-        except Exception as e:
-            st.error(f"Error saving workers: {e}")
-        finally:
             conn.close()
-    else:
-        conn.close()
-
-
-def assignments_page():
-    st.header("🔗 Assign Workers to Projects")
-
-    conn = get_connection()
-    projects = pd.read_sql("SELECT id, name FROM projects ORDER BY name", conn)
-    workers = pd.read_sql(
-        "SELECT id, worker_code, name, trade FROM workers ORDER BY worker_code",
-        conn,
-    )
-
-    if projects.empty or workers.empty:
-        conn.close()
-        st.info("Need at least one project and one worker to assign.")
-        return
-
-    project_name = st.selectbox("Select Project", projects["name"].tolist())
-    project_id = int(projects[projects["name"] == project_name]["id"].iloc[0])
-
-    assigned_df = pd.read_sql(
-        """
-        SELECT w.id, w.worker_code, w.name, w.trade
-        FROM workers w
-        JOIN project_workers pw ON w.id = pw.worker_id
-        WHERE pw.project_id=?
-        ORDER BY w.worker_code
-        """,
-        conn,
-        params=(project_id,),
-    )
-
-    assigned_ids = set(assigned_df["id"].tolist())
-
-    all_labels = [
-        f"{row.worker_code} - {row.name} ({row.trade})"
-        for _, row in workers.iterrows()
-    ]
-    id_by_label = {
-        f"{row.worker_code} - {row.name} ({row.trade})": int(row.id)
-        for _, row in workers.iterrows()
-    }
-
-    preselect = [
-        label for label, wid in id_by_label.items() if wid in assigned_ids
-    ]
-
-    selected_labels = st.multiselect(
-        "Select workers assigned to this project",
-        all_labels,
-        default=preselect,
-    )
-
-    if st.button("💾 Save Assignments"):
-        try:
-            cur = conn.cursor()
-            # Clear existing
-            cur.execute("DELETE FROM project_workers WHERE project_id=?", (project_id,))
-            # Insert new
-            for label in selected_labels:
-                wid = id_by_label[label]
-                cur.execute(
-                    "INSERT OR IGNORE INTO project_workers (project_id, worker_id) VALUES (?, ?)",
-                    (project_id, wid),
-                )
-            conn.commit()
-            st.success("Assignments updated.")
-            do_rerun()
-        except Exception as e:
-            st.error(f"Error saving assignments: {e}")
-        finally:
-            conn.close()
-    else:
-        conn.close()
-
-
-def attendance_page():
-    st.header("🕒 Attendance – Today")
-
-    conn = get_connection()
-    projects = pd.read_sql("SELECT id, name FROM projects ORDER BY name", conn)
-    workers = pd.read_sql(
-        "SELECT id, worker_code, name, role, trade FROM workers ORDER BY worker_code",
-        conn,
-    )
-
-    if projects.empty or workers.empty:
-        conn.close()
-        st.info("Need at least one project and one worker.")
-        return
-
-    project_name = st.selectbox("Project", projects["name"].tolist())
-    project_id = int(projects[projects["name"] == project_name]["id"].iloc[0])
-
-    # Workers assigned to this project
-    assigned = pd.read_sql(
-        """
-        SELECT w.id, w.worker_code, w.name, w.role, w.trade
-        FROM workers w
-        JOIN project_workers pw ON w.id = pw.worker_id
-        WHERE pw.project_id=?
-        ORDER BY w.worker_code
-        """,
-        conn,
-        params=(project_id,),
-    )
-
-    if assigned.empty:
-        st.info("No workers assigned to this project. Use Assignments page.")
-        return
-
-    st.caption(f"Date: {TODAY.isoformat()}")
-
-    for _, row in assigned.iterrows():
-        wid = int(row["id"])
-        current = get_today_attendance(wid, project_id)
-        col1, col2, col3, col4 = st.columns([4, 1.5, 1.5, 2])
-        with col1:
-            st.markdown(
-                f"**{row['worker_code']} – {row['name']}** ({row['trade']}, {row['role']})"
-            )
-        with col2:
-            present = st.checkbox(
-                "Present",
-                value=bool(current),
-                key=f"att_{wid}",
-            )
-        with col3:
-            t_in = st.text_input(
-                "Time In", value="07:00", key=f"tin_{wid}"
-            )
-        with col4:
-            t_out = st.text_input(
-                "Time Out", value="17:00", key=f"tout_{wid}"
-            )
-
-        if st.button("Save", key=f"save_att_{wid}"):
-            toggle_attendance(
-                worker_id=wid,
-                project_id=project_id,
-                att_date=TODAY.isoformat(),
-                present=present,
-                time_in=t_in if present else None,
-                time_out=t_out if present else None,
-            )
-            st.success("Attendance updated.")
+            st.success("Employees database updated.")
             do_rerun()
 
-    conn.close()
 
+# ===================== SETTINGS PAGE – DATA PATH =====================
 
-def reports_page():
-    st.header("📑 Attendance & Summary Reports")
-
-    conn = get_connection()
-    workers = pd.read_sql("SELECT id, worker_code, name FROM workers ORDER BY worker_code", conn)
-    projects = pd.read_sql("SELECT id, name FROM projects ORDER BY name", conn)
-
-    tab1, tab2 = st.tabs(["Daily Project Report", "Worker History"])
-
-    with tab1:
-        st.subheader("Daily Attendance by Project")
-        date_sel = st.date_input("Date", value=TODAY, key="rep_date")
-        proj_name = st.selectbox("Project", projects["name"].tolist(), key="rep_proj")
-        proj_id = int(projects[projects["name"] == proj_name]["id"].iloc[0])
-
-        df = pd.read_sql(
-            """
-            SELECT w.worker_code, w.name, w.role, w.trade,
-                   a.time_in, a.time_out, a.signed_in
-            FROM workers w
-            LEFT JOIN attendance a
-                 ON w.id = a.worker_id
-                AND a.project_id = ?
-                AND a.att_date = ?
-            ORDER BY w.worker_code
-            """,
-            conn,
-            params=(proj_id, date_sel.isoformat()),
-        )
-        df["Present"] = df["signed_in"].fillna(0).astype(int)
-        st.dataframe(
-            df[
-                [
-                    "worker_code",
-                    "name",
-                    "role",
-                    "trade",
-                    "time_in",
-                    "time_out",
-                    "Present",
-                ]
-            ],
-            use_container_width=True,
-        )
-
-    with tab2:
-        st.subheader("Worker Attendance History (last 60 days)")
-        worker_label = st.selectbox(
-            "Select Worker",
-            [f"{row.worker_code} - {row.name}" for _, row in workers.iterrows()],
-            key="rep_worker",
-        )
-        wid = int(
-            workers[
-                (
-                    workers["worker_code"]
-                    == worker_label.split(" - ")[0]
-                )
-            ]["id"].iloc[0]
-        )
-
-        since = TODAY - timedelta(days=60)
-        df = pd.read_sql(
-            """
-            SELECT a.att_date, p.name AS project_name,
-                   a.signed_in, a.time_in, a.time_out
-            FROM attendance a
-            LEFT JOIN projects p ON a.project_id = p.id
-            WHERE a.worker_id=? AND a.att_date>=?
-            ORDER BY a.att_date DESC
-            """,
-            conn,
-            params=(wid, since.isoformat()),
-        )
-        if df.empty:
-            st.info("No attendance in last 60 days.")
-        else:
-            df["Present"] = df["signed_in"].fillna(0).astype(int)
-            st.dataframe(
-                df[
-                    ["att_date", "project_name", "time_in", "time_out", "Present"]
-                ],
-                use_container_width=True,
-                height=400,
-            )
-
-    conn.close()
-
-
-def payroll_page():
-    st.header("💰 Payroll – Monthly Calculation")
-
-    today = TODAY
-    year = st.number_input("Year", min_value=2020, max_value=2100, value=today.year, step=1)
-    month = st.number_input("Month", min_value=1, max_value=12, value=today.month, step=1)
-
-    conn = get_connection()
-    projects = pd.read_sql("SELECT id, name FROM projects ORDER BY name", conn)
-    conn.close()
-
-    proj_options = ["All Projects"] + projects["name"].tolist()
-    proj_choice = st.selectbox("Project Scope", proj_options)
-
-    if proj_choice == "All Projects":
-        proj_id = None
-    else:
-        proj_id = int(projects[projects["name"] == proj_choice]["id"].iloc[0])
-
-    if st.button("▶️ Calculate Payroll"):
-        df = generate_monthly_payroll(int(year), int(month), proj_id)
-        if df is None or df.empty:
-            st.info("No workers or no attendance data for selected month.")
-            return
-
-        st.dataframe(df, use_container_width=True, height=400)
-
-        csv_bytes = df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "⬇️ Download Payroll CSV",
-            data=csv_bytes,
-            file_name=f"payroll_{year}_{month:02d}.csv",
-            mime="text/csv",
-        )
-
-        if REPORTLAB_AVAILABLE:
-            st.subheader("Payslip PDF Export")
-            mode = st.radio(
-                "PDF Mode",
-                ["Single Employee", "Batch (select multiple)"],
-            )
-
-            if mode == "Single Employee":
-                codes = df["worker_code"].tolist()
-                code_sel = st.selectbox("Select Employee", codes, key="pay_pdf_single")
-                row = df[df["worker_code"] == code_sel].iloc[0]
-                pdf_bytes = generate_payslip_pdf(row, int(year), int(month))
-                if pdf_bytes:
-                    st.download_button(
-                        "⬇️ Download Payslip PDF",
-                        data=pdf_bytes,
-                        file_name=f"payslip_{code_sel}_{year}_{month:02d}.pdf",
-                        mime="application/pdf",
-                    )
-            else:
-                codes = df["worker_code"].tolist()
-                codes_sel = st.multiselect(
-                    "Select Employees",
-                    codes,
-                    max_selections=5,
-                    key="pay_pdf_multi",
-                )
-                if codes_sel:
-                    rows = [df[df["worker_code"] == c].iloc[0] for c in codes_sel]
-                    pdf_bytes = generate_payslips_batch_pdf(rows, int(year), int(month))
-                    if pdf_bytes:
-                        st.download_button(
-                            "⬇️ Download Batch Payslips PDF (A5 pages)",
-                            data=pdf_bytes,
-                            file_name=f"payslips_batch_{year}_{month:02d}.pdf",
-                            mime="application/pdf",
-                        )
-        else:
-            st.info("To enable payslip PDF export: `pip install reportlab`")
-
-
-def database_page():
-    st.header("🗄 Raw Database Viewer")
-
-    conn = get_connection()
-    tabs = st.tabs(["Workers", "Projects", "Assignments", "Attendance"])
-
-    with tabs[0]:
-        df = pd.read_sql("SELECT * FROM workers", conn)
-        st.dataframe(df, use_container_width=True)
-
-    with tabs[1]:
-        df = pd.read_sql("SELECT * FROM projects", conn)
-        st.dataframe(df, use_container_width=True)
-
-    with tabs[2]:
-        df = pd.read_sql("SELECT * FROM project_workers", conn)
-        st.dataframe(df, use_container_width=True)
-
-    with tabs[3]:
-        df = pd.read_sql("SELECT * FROM attendance", conn)
-        st.dataframe(df, use_container_width=True)
-
-    conn.close()
-
-
-# ===================== ACCOUNTING SYNC PAGE =====================
+# ===================== ACCOUNTING SYNC – EXPORT MASTER DATA =====================
 def accounting_sync_page():
     st.header("📤 Accounting Sync – Export HR Master Data")
 
     st.markdown(
         """
-هذه الصفحة مخصصة لربط نظام الـ HR مع **نظام المحاسبة**:
+This page prepares **clean master data** to upload into your accounting system.
 
-- تصدير ملف **الموظفين/العمّال** لاستخدامه في جدول Employees في نظام الحسابات  
-- تصدير ملف **المشاريع** لاستخدامه في جدول Projects / Cost Centers  
+- Employees → one row per worker (code, name, role, trade, salary, phone)  
+- Projects  → one row per project (ID, name, held flag)
 
-> الملفات بصيغة CSV (تُفتح مباشرة في Excel) ويمكن رفعها لأي قاعدة بيانات محاسبية.
+👉 Files are exported as **CSV**, which opens directly in **Excel**
+and can be imported into your accounting / ERP.
         """
     )
 
     conn = get_connection()
-    workers_df = pd.read_sql(
+    emp_df = pd.read_sql(
         """
         SELECT
-            id AS worker_id,
-            worker_code,
-            name,
-            role,
-            trade,
-            salary,
-            visa_expiry,
-            phone
+            worker_code      AS EmpCode,
+            name             AS EmpName,
+            role             AS EmpRole,
+            trade            AS EmpTrade,
+            salary           AS BasicSalary,
+            phone            AS Phone,
+            visa_expiry      AS VisaExpiry
         FROM workers
         ORDER BY worker_code
         """,
         conn,
     )
-    projects_df = pd.read_sql(
+
+    proj_df = pd.read_sql(
         """
         SELECT
-            id AS project_id,
-            name AS project_name,
-            held AS held_flag
+            id        AS ProjectID,
+            name      AS ProjectName,
+            held      AS IsHeld
         FROM projects
-        ORDER BY name
+        ORDER BY id
         """,
         conn,
     )
     conn.close()
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.metric("Total Workers", len(workers_df))
-    with c2:
-        st.metric("Total Projects", len(projects_df))
+    col_emp, col_proj = st.columns(2)
 
-    st.markdown("---")
+    # ---- Employees export ----
+    with col_emp:
+        st.subheader("👷 Employees Master (for Accounting)")
 
-    col1, col2 = st.columns(2)
+        if emp_df.empty:
+            st.info("No employees found in database.")
+        else:
+            st.dataframe(emp_df, use_container_width=True, height=300)
 
-    # ---- Workers export ----
-    with col1:
-        st.subheader("👷 Employees / Workers Master")
-        st.caption("استخدم هذا الملف لجدول Employees في نظام المحاسبة.")
-        st.dataframe(workers_df, use_container_width=True, height=300)
-
-        workers_csv = workers_df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "⬇️ Download nps_workers_for_accounting.csv",
-            data=workers_csv,
-            file_name="nps_workers_for_accounting.csv",
-            mime="text/csv",
-        )
+            emp_csv = emp_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇️ Download Employees CSV (open in Excel)",
+                data=emp_csv,
+                file_name="nps_hr_employees_for_accounting.csv",
+                mime="text/csv",
+            )
 
     # ---- Projects export ----
-    with col2:
-        st.subheader("🏗 Projects Master")
-        st.caption("استخدم هذا الملف لجدول Projects أو Cost Centers في نظام المحاسبة.")
-        st.dataframe(projects_df, use_container_width=True, height=300)
+    with col_proj:
+        st.subheader("🏗 Projects Master (for Accounting)")
 
-        projects_csv = projects_df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "⬇️ Download nps_projects_for_accounting.csv",
-            data=projects_csv,
-            file_name="nps_projects_for_accounting.csv",
-            mime="text/csv",
-        )
+        if proj_df.empty:
+            st.info("No projects found in database.")
+        else:
+            st.dataframe(proj_df, use_container_width=True, height=300)
 
-    st.info(
+            proj_csv = proj_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇️ Download Projects CSV (open in Excel)",
+                data=proj_csv,
+                file_name="nps_hr_projects_for_accounting.csv",
+                mime="text/csv",
+            )
+
+    st.markdown(
         """
-💡 **اقتراح تطوير لاحقاً:**
-يمكن لاحقاً إضافة زر "Import from Accounting" لقراءة أكواد المشاريع أو مراكز التكلفة من نظام الحسابات
-وإعادة مزامنتها مع الـ HR.
+#### Next Step in Accounting System
+
+1. Open the downloaded **CSV** files in Excel (double click).  
+2. Check / adjust column names if your accounting system needs special names.  
+3. Import into accounting DB (employees master / projects master).
         """
     )
 
 
-# ===================== SETTINGS PAGE – DATA PATH =====================
 def settings_page():
-    global DATA_DIR, PHOTOS_DIR, DB_PATH
-
     st.header("⚙️ Settings – Data / Cloud Path")
+
+    global DATA_DIR, PHOTOS_DIR, DB_PATH
 
     st.markdown(
         """
-### Data Folder (OneDrive or Local)
+This page controls **where your HR data is stored** (database + photos).
 
-The app stores:
+### Default (local PCs)
 
-- `hr.db`  → HR database (workers, projects, attendance, payroll)
-- `photos` → employee photo files
+By default, the system uses:
 
-**Recommended setup (OneDrive shared folder):**
+- `C:\\Users\\<username>\\OneDrive\\NPS_HR_DATA`
 
-1. On one PC, create folder: `C:\\Users\\<username>\\OneDrive\\NPS_HR_DATA`  
-2. Put `hr.db` and `photos` in this OneDrive folder.  
-3. Install this app on all HR PCs.  
-4. Point all PCs to the **same** OneDrive folder.  
-5. All HR users will see the same data.
-        """
+If you use the **same OneDrive account** on multiple PCs:
+
+1. Put `hr.db` and `photos` in this OneDrive folder.  
+2. All PCs running this app will read/write the **same data**.
+
+You can also change the folder below (local drive, network drive, or a different OneDrive name).
+"""
     )
 
     st.write(f"**Default OneDrive path:** `{DEFAULT_DATA_DIR}`")
@@ -1579,15 +1905,15 @@ The app stores:
         """
 ### How to move existing data (step by step)
 
-1. Close the HR app.  
-2. Go to your old data folder (for example `D:\\NileHR\\app\\data`).  
+1. Close the HR app.
+2. Go to your old data folder (for example `D:\\NileHR\\app\\data`).
 3. Copy:
    - `hr.db` → into your new data folder  
-   - `photos` folder → into your new data folder  
-4. Open the HR app again.  
-5. In **Settings**, set the data path to that folder (if not already).  
+   - `photos` folder → into your new data folder
+4. Open the HR app again.
+5. In **Settings**, set the data path to that folder (if not already).
 6. Confirm that employees, projects, attendance, and photos appear correctly.
-        """
+"""
     )
 
 
@@ -1691,7 +2017,7 @@ def main():
         "Attendance",
         "Reports",
         "Payroll",
-        "Accounting Sync",   # NEW
+        "Accounting Sync",
         "Database",
         "Settings",
         "Help / About",
@@ -1707,7 +2033,6 @@ def main():
 
     st.sidebar.markdown("### Add Master Data")
 
-    # Add Project (quick)
     st.sidebar.markdown("**➕ Add Project**")
     proj_name = st.sidebar.text_input("Project Name", key="sb_proj_name")
     held = st.sidebar.checkbox("Held (on hold)", key="sb_proj_held")
@@ -1726,7 +2051,6 @@ def main():
             st.sidebar.warning("Enter project name.")
 
     st.sidebar.markdown("---")
-    # Add Employee (quick)
     st.sidebar.markdown("**➕ Add Employee**")
     w_name = st.sidebar.text_input("Full Name", key="sb_emp_name")
     w_role = st.sidebar.selectbox(
@@ -1822,3 +2146,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
