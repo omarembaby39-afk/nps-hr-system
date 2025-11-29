@@ -1753,44 +1753,52 @@ def database_page():
 # ===================== SETTINGS PAGE – DATA PATH =====================
 
 # ===================== ACCOUNTING SYNC – EXPORT MASTER DATA =====================
+# ===================== ACCOUNTING SYNC – EXPORT MASTER DATA =====================
 def accounting_sync_page():
     st.header("📤 Accounting Sync – Export HR Master Data")
 
     st.markdown(
         """
-This page prepares **clean master data** to upload into your accounting system.
+        This page prepares **clean master data** to upload into your accounting system.
 
-- Employees → one row per worker (code, name, role, trade, salary, phone)  
-- Projects  → one row per project (ID, name, held flag)
+        **Employees CSV must have these columns:**
+        `emp_code, name, position, nationality, basic_salary, allowance, project_code, visa_expiry`
 
-👉 Files are exported as **CSV**, which opens directly in **Excel**
-and can be imported into your accounting / ERP.
+        We map them from the HR database as follows:
+        - emp_code      → worker_code
+        - name          → name
+        - position      → role
+        - nationality   → (not in DB yet → left empty or 'Unknown')
+        - basic_salary  → salary
+        - allowance     → 0 (for now)
+        - project_code  → (not linked yet → empty)
+        - visa_expiry   → visa_expiry
         """
     )
 
+    # ---- Load from HR DB ----
     conn = get_connection()
-    emp_df = pd.read_sql(
+    emp_raw = pd.read_sql(
         """
         SELECT
-            worker_code      AS EmpCode,
-            name             AS EmpName,
-            role             AS EmpRole,
-            trade            AS EmpTrade,
-            salary           AS BasicSalary,
-            phone            AS Phone,
-            visa_expiry      AS VisaExpiry
+            worker_code,
+            name,
+            role,
+            trade,
+            salary,
+            visa_expiry
         FROM workers
         ORDER BY worker_code
         """,
         conn,
     )
 
-    proj_df = pd.read_sql(
+    proj_raw = pd.read_sql(
         """
         SELECT
-            id        AS ProjectID,
-            name      AS ProjectName,
-            held      AS IsHeld
+            id,
+            name,
+            held
         FROM projects
         ORDER BY id
         """,
@@ -1800,129 +1808,55 @@ and can be imported into your accounting / ERP.
 
     col_emp, col_proj = st.columns(2)
 
- # ---- Employees export ----
-with col_emp:
-    st.subheader("👷 Employees Master (for Accounting)")
+    # ---- EMPLOYEES EXPORT (Accounting Format) ----
+    with col_emp:
+        st.subheader("👷 Employees CSV (Accounting Format)")
 
-    # Convert HR fields → Accounting required fields
-    emp_export = pd.DataFrame()
-    emp_export["emp_code"] = emp_df["EmpCode"]                # worker_code
-    emp_export["name"] = emp_df["EmpName"]                    # name
-    emp_export["position"] = emp_df["EmpRole"]                # role
-    emp_export["nationality"] = "Unknown"                     # no nationality in DB → default
-    emp_export["basic_salary"] = emp_df["BasicSalary"]        # salary
-    emp_export["allowance"] = 0                               # no allowance in system
-    emp_export["project_code"] = ""                           # HR DB has no project code
-    emp_export["visa_expiry"] = emp_df["VisaExpiry"]          # visa_expiry
-
-    st.dataframe(emp_export, use_container_width=True, height=300)
-
-    emp_csv = emp_export.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "⬇️ Download Employees CSV (Accounting Format)",
-        data=emp_csv,
-        file_name="employees_for_accounting.csv",
-        mime="text/csv",
-    )
-
-    # ---- Projects export ----
-    with col_proj:
-        st.subheader("🏗 Projects Master (for Accounting)")
-
-        if proj_df.empty:
-            st.info("No projects found in database.")
+        if emp_raw.empty:
+            st.info("No employees found in database.")
         else:
-            st.dataframe(proj_df, use_container_width=True, height=300)
+            emp_export = pd.DataFrame()
+            # Required columns for accounting system:
+            emp_export["emp_code"] = emp_raw["worker_code"].fillna("")
+            emp_export["name"] = emp_raw["name"].fillna("")
+            emp_export["position"] = emp_raw["role"].fillna("")
+            emp_export["nationality"] = ""          # or "Unknown" if you prefer
+            emp_export["basic_salary"] = emp_raw["salary"].fillna(0)
+            emp_export["allowance"] = 0             # no allowance field in HR DB yet
+            emp_export["project_code"] = ""         # not linked yet
+            emp_export["visa_expiry"] = emp_raw["visa_expiry"].fillna("")
 
-            proj_csv = proj_df.to_csv(index=False).encode("utf-8")
+            st.dataframe(emp_export, use_container_width=True, height=300)
+
+            emp_csv = emp_export.to_csv(index=False).encode("utf-8")
             st.download_button(
-                "⬇️ Download Projects CSV (open in Excel)",
-                data=proj_csv,
-                file_name="nps_hr_projects_for_accounting.csv",
+                "⬇️ Download Employees CSV (Accounting Format)",
+                data=emp_csv,
+                file_name="employees_for_accounting.csv",
                 mime="text/csv",
             )
 
-    st.markdown(
-        """
-#### Next Step in Accounting System
+    # ---- PROJECTS EXPORT (optional helper for accounting) ----
+    with col_proj:
+        st.subheader("🏗 Projects CSV (Helper for Accounting)")
 
-1. Open the downloaded **CSV** files in Excel (double click).  
-2. Check / adjust column names if your accounting system needs special names.  
-3. Import into accounting DB (employees master / projects master).
-        """
-    )
-
-
-def settings_page():
-    st.header("⚙️ Settings – Data / Cloud Path")
-
-    global DATA_DIR, PHOTOS_DIR, DB_PATH
-
-    st.markdown(
-        """
-This page controls **where your HR data is stored** (database + photos).
-
-### Default (local PCs)
-
-By default, the system uses:
-
-- `C:\\Users\\<username>\\OneDrive\\NPS_HR_DATA`
-
-If you use the **same OneDrive account** on multiple PCs:
-
-1. Put `hr.db` and `photos` in this OneDrive folder.  
-2. All PCs running this app will read/write the **same data**.
-
-You can also change the folder below (local drive, network drive, or a different OneDrive name).
-"""
-    )
-
-    st.write(f"**Default OneDrive path:** `{DEFAULT_DATA_DIR}`")
-    st.write(f"**Current active data path:** `{DATA_DIR}`")
-
-    new_path = st.text_input(
-        "Data folder path (for hr.db + photos)",
-        value=DATA_DIR,
-        help="Example: C:\\Users\\acer\\OneDrive\\NPS_HR_DATA",
-    )
-
-    if st.button("Save Data Path"):
-        new_path_clean = new_path.strip()
-        if not new_path_clean:
-            st.warning("Please enter a valid folder path.")
+        if proj_raw.empty:
+            st.info("No projects found in database.")
         else:
-            try:
-                os.makedirs(new_path_clean, exist_ok=True)
-                photos_dir = os.path.join(new_path_clean, "photos")
-                os.makedirs(photos_dir, exist_ok=True)
+            proj_export = pd.DataFrame()
+            proj_export["project_code"] = proj_raw["id"]
+            proj_export["project_name"] = proj_raw["name"]
+            proj_export["is_held"] = proj_raw["held"]
 
-                DATA_DIR = new_path_clean
-                PHOTOS_DIR = photos_dir
-                DB_PATH = os.path.join(new_path_clean, "hr.db")
+            st.dataframe(proj_export, use_container_width=True, height=300)
 
-                st.success(f"Data path updated to: {new_path_clean}")
-                st.info(
-                    "If hr.db and photos already exist in this folder, the app will use them. "
-                    "Otherwise a new empty database will be created."
-                )
-                do_rerun()
-            except Exception as e:
-                st.error(f"Failed to use this path: {e}")
-
-    st.markdown(
-        """
-### How to move existing data (step by step)
-
-1. Close the HR app.
-2. Go to your old data folder (for example `D:\\NileHR\\app\\data`).
-3. Copy:
-   - `hr.db` → into your new data folder  
-   - `photos` folder → into your new data folder
-4. Open the HR app again.
-5. In **Settings**, set the data path to that folder (if not already).
-6. Confirm that employees, projects, attendance, and photos appear correctly.
-"""
-    )
+            proj_csv = proj_export.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "⬇️ Download Projects CSV",
+                data=proj_csv,
+                file_name="projects_for_accounting.csv",
+                mime="text/csv",
+            )
 
 
 # ===================== HELP / ABOUT =====================
@@ -2154,5 +2088,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
