@@ -1748,31 +1748,29 @@ def database_page():
             conn.close()
             st.success("Employees database updated.")
             do_rerun()
-
-
-# ===================== SETTINGS PAGE – DATA PATH =====================
+# ===================== SETTINGS PAGE =====================
 def settings_page():
-    st.header("⚙️ Settings – Data / Cloud Path")
-
     global DATA_DIR, PHOTOS_DIR, DB_PATH
+
+    st.header("⚙️ Settings – Data / Cloud Path")
 
     st.markdown(
         """
-This page controls **where your HR data is stored** (database + photos).
+### Data Folder (OneDrive or Local)
 
-### Default (local PCs)
+The app stores:
 
-By default, the system uses:
+- `hr.db`  → HR database (workers, projects, attendance, payroll)
+- `photos` → employee photo files
 
-- `C:\\Users\\<username>\\OneDrive\\NPS_HR_DATA`
+**Recommended setup (OneDrive shared folder):**
 
-If you use the **same OneDrive account** on multiple PCs:
-
-1. Put `hr.db` and `photos` in this OneDrive folder.  
-2. All PCs running this app will read/write the **same data**.
-
-You can also change the folder below (local drive, network drive, or a different OneDrive name).
-"""
+1. On one PC, create folder: `C:\\Users\\<username>\\OneDrive\\NPS_HR_DATA`
+2. Put `hr.db` and `photos` in this OneDrive folder.  
+3. Install this app on all HR PCs.
+4. Point all PCs to the **same** OneDrive folder.
+5. All HR users will see the same data.
+        """
     )
 
     st.write(f"**Default OneDrive path:** `{DEFAULT_DATA_DIR}`")
@@ -1814,13 +1812,369 @@ You can also change the folder below (local drive, network drive, or a different
 1. Close the HR app.
 2. Go to your old data folder (for example `D:\\NileHR\\app\\data`).
 3. Copy:
-   - `hr.db` → into your new data folder  
-   - `photos` folder → into your new data folder
+   - `hr.db`   → into your new data folder  
+   - `photos`  → into your new data folder
 4. Open the HR app again.
 5. In **Settings**, set the data path to that folder (if not already).
 6. Confirm that employees, projects, attendance, and photos appear correctly.
+        """
+    )
+
+
+# ===================== ACCOUNTING SYNC – EXPORT / IMPORT =====================
+def accounting_sync_page():
+    """
+    Export HR master data (employees + projects) to Excel
+    in a **fixed format** for the Accounting system.
+
+    Also optional Import back from Excel (if Accounting becomes the master).
+    """
+    st.header("🔄 Accounting Sync – Export / Import Master Data")
+
+    st.markdown(
+        """
+Use this page to **synchronize HR master data** with the **Accounting System**.
+
+- **Export** → HR ➜ Accounting (Excel files to upload into accounting DB)  
+- **Import (optional)** → Accounting ➜ HR (if accounting sends back updated master lists)
+
+All exported files use a **stable column structure** so that the accounting DB can
+read them directly without manual editing.
 """
     )
+
+    # -------- READ CURRENT DATA FROM HR DB --------
+    conn = get_connection()
+    df_emp = pd.read_sql(
+        """
+        SELECT id,
+               worker_code,
+               name,
+               role,
+               trade,
+               salary,
+               phone,
+               visa_expiry
+        FROM workers
+        ORDER BY id
+        """,
+        conn,
+    )
+    df_proj = pd.read_sql(
+        """
+        SELECT id,
+               name,
+               held
+        FROM projects
+        ORDER BY id
+        """,
+        conn,
+    )
+    conn.close()
+
+    # ==================== EXPORT SECTION ====================
+    st.subheader("📤 Export for Accounting")
+
+    col_emp, col_proj = st.columns(2)
+
+    # ----- Export Employees -----
+    with col_emp:
+        st.markdown("#### Employees → `employees_for_accounting.xlsx`")
+
+        if df_emp.empty:
+            st.info("No employees in the database to export.")
+        else:
+            # Create Excel file in memory
+            emp_buf = io.BytesIO()
+            with pd.ExcelWriter(emp_buf, engine="openpyxl") as writer:
+                df_emp.to_excel(writer, index=False, sheet_name="Employees")
+            emp_buf.seek(0)
+
+            st.download_button(
+                "⬇️ Download Employees Excel",
+                data=emp_buf.getvalue(),
+                file_name="employees_for_accounting.xlsx",
+                mime=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.sheet"
+                ),
+                help="Upload this file into the Accounting System employee master.",
+            )
+
+            st.caption(
+                """
+**Columns in employees_for_accounting.xlsx**
+
+- `id` – internal HR numeric ID  
+- `worker_code` – NPS-Wxxxx (key for badges, reports, and accounting)  
+- `name` – full name  
+- `role` – job title (Technician, Engineer, Helper, etc.)  
+- `trade` – HVAC / Plumbing / Fire / Admin / ...  
+- `salary` – basic monthly salary  
+- `phone` – contact number  
+- `visa_expiry` – YYYY-MM-DD
+"""
+            )
+
+    # ----- Export Projects -----
+    with col_proj:
+        st.markdown("#### Projects → `projects_for_accounting.xlsx`")
+
+        if df_proj.empty:
+            st.info("No projects in the database to export.")
+        else:
+            proj_buf = io.BytesIO()
+            with pd.ExcelWriter(proj_buf, engine="openpyxl") as writer:
+                df_proj.to_excel(writer, index=False, sheet_name="Projects")
+            proj_buf.seek(0)
+
+            st.download_button(
+                "⬇️ Download Projects Excel",
+                data=proj_buf.getvalue(),
+                file_name="projects_for_accounting.xlsx",
+                mime=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.sheet"
+                ),
+                help="Upload this file into the Accounting System project master.",
+            )
+
+            st.caption(
+                """
+**Columns in projects_for_accounting.xlsx**
+
+- `id` – internal HR numeric ID  
+- `name` – project name (Um Qasr FM, Baghdad PH2, etc.)  
+- `held` – 0 = running, 1 = held
+"""
+            )
+
+    st.markdown("---")
+
+    # ==================== OPTIONAL IMPORT SECTION ====================
+    st.subheader("📥 Optional Import from Accounting (back to HR)")
+
+    st.markdown(
+        """
+Only use this if **Accounting** sends back a master list which should **overwrite**
+or **update** the HR database.
+
+Recommended usage:
+
+- If HR is the **master** → use **Export only** (ignore Import).  
+- If Accounting becomes the **master** → you may use Import to sync back.
+"""
+    )
+
+    tab_emp, tab_proj = st.tabs(["Import Employees", "Import Projects"])
+
+    # ----- IMPORT EMPLOYEES -----
+    with tab_emp:
+        st.markdown("Upload `employees_for_accounting.xlsx` (or updated version).")
+        emp_up = st.file_uploader(
+            "Excel file for Employees (same structure as export)",
+            type=["xlsx"],
+            key="imp_emp_accounting",
+        )
+
+        if emp_up is not None:
+            try:
+                df_new_emp = pd.read_excel(emp_up)
+
+                required_cols = {
+                    "id",
+                    "worker_code",
+                    "name",
+                    "role",
+                    "trade",
+                    "salary",
+                    "phone",
+                    "visa_expiry",
+                }
+                missing = required_cols.difference(df_new_emp.columns)
+                if missing:
+                    st.error(
+                        "Missing columns in uploaded file: "
+                        + ", ".join(sorted(missing))
+                    )
+                else:
+                    conn = get_connection()
+                    cur = conn.cursor()
+
+                    # We will upsert by worker_code (if exists → update, else insert)
+                    for _, r in df_new_emp.iterrows():
+                        worker_code = str(r["worker_code"]).strip() if r["worker_code"] else None
+                        name = str(r["name"]).strip() if r["name"] else ""
+                        if not name:
+                            # Skip empty row
+                            continue
+
+                        role = str(r["role"]).strip() if r["role"] else ""
+                        trade = str(r["trade"]).strip() if r["trade"] else ""
+                        phone = str(r["phone"]).strip() if r["phone"] else ""
+                        salary_val = float(r["salary"] or 0)
+                        visa_val = None
+                        if not pd.isna(r["visa_expiry"]):
+                            try:
+                                # Already a date or string convertible to isoformat
+                                if isinstance(r["visa_expiry"], (datetime, date)):
+                                    visa_val = r["visa_expiry"].date().isoformat()
+                                else:
+                                    visa_val = str(r["visa_expiry"])[:10]
+                            except Exception:
+                                visa_val = None
+
+                        if worker_code:
+                            # Check if worker exists
+                            cur.execute(
+                                "SELECT id FROM workers WHERE worker_code=?",
+                                (worker_code,),
+                            )
+                            row = cur.fetchone()
+                        else:
+                            row = None
+
+                        if row:
+                            # UPDATE existing
+                            cur.execute(
+                                """
+                                UPDATE workers
+                                   SET name=?,
+                                       role=?,
+                                       trade=?,
+                                       salary=?,
+                                       phone=?,
+                                       visa_expiry=?
+                                 WHERE worker_code=?
+                                """,
+                                (
+                                    name,
+                                    role,
+                                    trade,
+                                    salary_val,
+                                    phone,
+                                    visa_val,
+                                    worker_code,
+                                ),
+                            )
+                        else:
+                            # INSERT new (worker_code might be None → generate)
+                            if not worker_code:
+                                worker_code = generate_next_worker_code()
+                            cur.execute(
+                                """
+                                INSERT INTO workers
+                                      (worker_code, name, role, trade,
+                                       salary, phone, visa_expiry)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    worker_code,
+                                    name,
+                                    role,
+                                    trade,
+                                    salary_val,
+                                    phone,
+                                    visa_val,
+                                ),
+                            )
+
+                    conn.commit()
+                    conn.close()
+                    st.success("Employees imported / updated successfully from Accounting.")
+                    st.info("Reload the page to see updated data.")
+                    if st.button("🔁 Refresh now"):
+                        do_rerun()
+
+            except Exception as e:
+                st.error(f"Import error for employees: {e}")
+
+    # ----- IMPORT PROJECTS -----
+    with tab_proj:
+        st.markdown("Upload `projects_for_accounting.xlsx` (or updated version).")
+        proj_up = st.file_uploader(
+            "Excel file for Projects (same structure as export)",
+            type=["xlsx"],
+            key="imp_proj_accounting",
+        )
+
+        if proj_up is not None:
+            try:
+                df_new_proj = pd.read_excel(proj_up)
+
+                required_cols = {"id", "name", "held"}
+                missing = required_cols.difference(df_new_proj.columns)
+                if missing:
+                    st.error(
+                        "Missing columns in uploaded file: "
+                        + ", ".join(sorted(missing))
+                    )
+                else:
+                    conn = get_connection()
+                    cur = conn.cursor()
+
+                    for _, r in df_new_proj.iterrows():
+                        name = str(r["name"]).strip() if r["name"] else ""
+                        if not name:
+                            continue
+                        held_val = int(r["held"] or 0)
+
+                        # Check by id first; if not present, check by name
+                        pid = None
+                        if not pd.isna(r["id"]):
+                            try:
+                                pid = int(r["id"])
+                            except Exception:
+                                pid = None
+
+                        row = None
+                        if pid is not None:
+                            cur.execute("SELECT id FROM projects WHERE id=?", (pid,))
+                            row = cur.fetchone()
+
+                        if row:
+                            cur.execute(
+                                """
+                                UPDATE projects
+                                   SET name=?, held=?
+                                 WHERE id=?
+                                """,
+                                (name, held_val, pid),
+                            )
+                        else:
+                            # Check if a project with same name exists
+                            cur.execute(
+                                "SELECT id FROM projects WHERE name=?",
+                                (name,),
+                            )
+                            row2 = cur.fetchone()
+                            if row2:
+                                cur.execute(
+                                    """
+                                    UPDATE projects
+                                       SET held=?
+                                     WHERE id=?
+                                    """,
+                                    (held_val, row2[0]),
+                                )
+                            else:
+                                cur.execute(
+                                    """
+                                    INSERT INTO projects (name, held)
+                                    VALUES (?, ?)
+                                    """,
+                                    (name, held_val),
+                                )
+
+                    conn.commit()
+                    conn.close()
+                    st.success("Projects imported / updated successfully from Accounting.")
+                    st.info("Reload the page to see updated data.")
+                    if st.button("🔁 Refresh now", key="refresh_proj"):
+                        do_rerun()
+
+            except Exception as e:
+                st.error(f"Import error for projects: {e}")
 
 
 # ===================== HELP / ABOUT =====================
@@ -1861,82 +2215,12 @@ Official website: **www.nileps.com**
 """
     )
 
-# ===================== ACCOUNTING EXPORT / IMPORT =====================
-def accounting_sync_page():
-    st.header("📤 Export / 📥 Import – Accounting System Sync")
-
-    st.markdown("""
-    Use this page to **export HR master data** (Employees + Projects)
-    for uploading into the Accounting System.
-    
-    Output format is fixed and compatible with your accounting database.
-    """)
-
-    # --- Export Employees ---
-    conn = get_connection()
-    df_emp = pd.read_sql(
-        "SELECT id, worker_code, name, role, trade, salary, phone, visa_expiry FROM workers ORDER BY id",
-        conn,
-    )
-    df_proj = pd.read_sql(
-        "SELECT id, name, held FROM projects ORDER BY id",
-        conn,
-    )
-    conn.close()
-
-    st.subheader("📤 Export Employees")
-    st.download_button(
-        "Download employees.xlsx",
-        data=df_emp.to_excel(index=False, engine="openpyxl"),
-        file_name="employees.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
-    st.subheader("📤 Export Projects")
-    st.download_button(
-        "Download projects.xlsx",
-        data=df_proj.to_excel(index=False, engine="openpyxl"),
-        file_name="projects.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
-    st.markdown("---")
-
-    # --- Import (Optional) ---
-    st.subheader("📥 Import Employees (optional)")
-
-    emp_file = st.file_uploader("Upload employees.xlsx", type=["xlsx"], key="imp_emp")
-    if emp_file:
-        try:
-            df_new = pd.read_excel(emp_file)
-            conn = get_connection()
-            cur = conn.cursor()
-
-            for _, r in df_new.iterrows():
-                cur.execute("""
-                    INSERT OR REPLACE INTO workers (id, worker_code, name, role, trade, salary, phone, visa_expiry)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    int(r["id"]),
-                    str(r["worker_code"]),
-                    str(r["name"]),
-                    str(r["role"]),
-                    str(r["trade"]),
-                    float(r["salary"]),
-                    str(r["phone"]),
-                    str(r["visa_expiry"]),
-                ))
-            conn.commit()
-            conn.close()
-            st.success("Employees imported successfully.")
-
-        except Exception as e:
-            st.error(f"Import error: {e}")
 
 # ===================== MAIN APP & SIDEBAR =====================
 def main():
     st.set_page_config(page_title="NPS HR System", layout="wide")
 
+    # Global styling
     st.markdown(
         f"""
         <style>
@@ -1981,8 +2265,10 @@ def main():
     if "page" not in st.session_state:
         st.session_state["page"] = "Dashboard"
 
+    # Ensure DB exists / patched
     init_db()
 
+    # ----- SIDEBAR NAV -----
     st.sidebar.title("NPS HR Navigation")
 
     pages = [
@@ -1994,6 +2280,7 @@ def main():
         "Attendance",
         "Reports",
         "Payroll",
+        "Accounting Sync",   # NEW PAGE FOR ACCOUNTING EXPORT / IMPORT
         "Database",
         "Settings",
         "Help / About",
@@ -2002,43 +2289,17 @@ def main():
     selected_page = st.sidebar.radio(
         "Main Menu",
         pages,
-        index=pages.index(st.session_state["page"]),
-        key="main_menu",
+        index=pages.index(st.session_state.get("page", "Dashboard")),
     )
     st.session_state["page"] = selected_page
 
-    st.sidebar.markdown("### Add Master Data")
-
-    st.sidebar.markdown("**➕ Add Project**")
-    proj_name = st.sidebar.text_input("Project Name", key="sb_proj_name")
-    held = st.sidebar.checkbox("Held (on hold)", key="sb_proj_held")
-    if st.sidebar.button("Save Project", key="sb_proj_save"):
-        if proj_name.strip():
-            conn = get_connection()
-            conn.execute(
-                "INSERT INTO projects (name, held) VALUES (?, ?)",
-                (proj_name.strip(), int(held)),
-            )
-            conn.commit()
-            conn.close()
-            st.sidebar.success("Project added.")
-            do_rerun()
-        else:
-            st.sidebar.warning("Enter project name.")
-
+    # ----- QUICK ADD EMPLOYEE IN SIDEBAR -----
     st.sidebar.markdown("---")
-    st.sidebar.markdown("**➕ Add Employee**")
-    w_name = st.sidebar.text_input("Full Name", key="sb_emp_name")
-    w_role = st.sidebar.selectbox(
-        "Role",
-        ["Technician", "Engineer", "Supervisor", "Helper", "Accountant", "Driver", "HR", "Other"],
-        key="sb_emp_role",
-    )
-    w_trade = st.sidebar.selectbox(
-        "Trade",
-        ["HVAC", "Plumbing", "Fire", "Electrical", "Logistics", "Admin", "Other"],
-        key="sb_emp_trade",
-    )
+    st.sidebar.subheader("➕ Quick Add Employee")
+
+    w_name = st.sidebar.text_input("Name", key="sb_emp_name")
+    w_role = st.sidebar.text_input("Role", key="sb_emp_role")
+    w_trade = st.sidebar.text_input("Trade", key="sb_emp_trade")
     w_salary = st.sidebar.number_input(
         "Basic Salary", min_value=0.0, step=100.0, key="sb_emp_salary"
     )
@@ -2087,6 +2348,7 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.caption(f"Data path:\n{DATA_DIR}")
 
+    # ----- MAIN PAGE ROUTING -----
     current_page = st.session_state["page"]
 
     if current_page == "Dashboard":
@@ -2105,6 +2367,8 @@ def main():
         reports_page()
     elif current_page == "Payroll":
         payroll_page()
+    elif current_page == "Accounting Sync":
+        accounting_sync_page()
     elif current_page == "Database":
         database_page()
     elif current_page == "Settings":
@@ -2112,6 +2376,7 @@ def main():
     elif current_page == "Help / About":
         help_page()
 
+    # ----- FOOTER -----
     st.markdown(
         '<div class="nps-footer">© 2025 Nile Projects Service Company | www.nileps.com</div>',
         unsafe_allow_html=True,
@@ -2120,5 +2385,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
