@@ -1800,22 +1800,30 @@ and can be imported into your accounting / ERP.
 
     col_emp, col_proj = st.columns(2)
 
-    # ---- Employees export ----
-    with col_emp:
-        st.subheader("👷 Employees Master (for Accounting)")
+ # ---- Employees export ----
+with col_emp:
+    st.subheader("👷 Employees Master (for Accounting)")
 
-        if emp_df.empty:
-            st.info("No employees found in database.")
-        else:
-            st.dataframe(emp_df, use_container_width=True, height=300)
+    # Convert HR fields → Accounting required fields
+    emp_export = pd.DataFrame()
+    emp_export["emp_code"] = emp_df["EmpCode"]                # worker_code
+    emp_export["name"] = emp_df["EmpName"]                    # name
+    emp_export["position"] = emp_df["EmpRole"]                # role
+    emp_export["nationality"] = "Unknown"                     # no nationality in DB → default
+    emp_export["basic_salary"] = emp_df["BasicSalary"]        # salary
+    emp_export["allowance"] = 0                               # no allowance in system
+    emp_export["project_code"] = ""                           # HR DB has no project code
+    emp_export["visa_expiry"] = emp_df["VisaExpiry"]          # visa_expiry
 
-            emp_csv = emp_df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                "⬇️ Download Employees CSV (open in Excel)",
-                data=emp_csv,
-                file_name="nps_hr_employees_for_accounting.csv",
-                mime="text/csv",
-            )
+    st.dataframe(emp_export, use_container_width=True, height=300)
+
+    emp_csv = emp_export.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "⬇️ Download Employees CSV (Accounting Format)",
+        data=emp_csv,
+        file_name="employees_for_accounting.csv",
+        mime="text/csv",
+    )
 
     # ---- Projects export ----
     with col_proj:
@@ -2146,4 +2154,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
