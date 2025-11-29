@@ -1861,6 +1861,77 @@ Official website: **www.nileps.com**
 """
     )
 
+# ===================== ACCOUNTING EXPORT / IMPORT =====================
+def accounting_sync_page():
+    st.header("📤 Export / 📥 Import – Accounting System Sync")
+
+    st.markdown("""
+    Use this page to **export HR master data** (Employees + Projects)
+    for uploading into the Accounting System.
+    
+    Output format is fixed and compatible with your accounting database.
+    """)
+
+    # --- Export Employees ---
+    conn = get_connection()
+    df_emp = pd.read_sql(
+        "SELECT id, worker_code, name, role, trade, salary, phone, visa_expiry FROM workers ORDER BY id",
+        conn,
+    )
+    df_proj = pd.read_sql(
+        "SELECT id, name, held FROM projects ORDER BY id",
+        conn,
+    )
+    conn.close()
+
+    st.subheader("📤 Export Employees")
+    st.download_button(
+        "Download employees.xlsx",
+        data=df_emp.to_excel(index=False, engine="openpyxl"),
+        file_name="employees.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+    st.subheader("📤 Export Projects")
+    st.download_button(
+        "Download projects.xlsx",
+        data=df_proj.to_excel(index=False, engine="openpyxl"),
+        file_name="projects.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+    st.markdown("---")
+
+    # --- Import (Optional) ---
+    st.subheader("📥 Import Employees (optional)")
+
+    emp_file = st.file_uploader("Upload employees.xlsx", type=["xlsx"], key="imp_emp")
+    if emp_file:
+        try:
+            df_new = pd.read_excel(emp_file)
+            conn = get_connection()
+            cur = conn.cursor()
+
+            for _, r in df_new.iterrows():
+                cur.execute("""
+                    INSERT OR REPLACE INTO workers (id, worker_code, name, role, trade, salary, phone, visa_expiry)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    int(r["id"]),
+                    str(r["worker_code"]),
+                    str(r["name"]),
+                    str(r["role"]),
+                    str(r["trade"]),
+                    float(r["salary"]),
+                    str(r["phone"]),
+                    str(r["visa_expiry"]),
+                ))
+            conn.commit()
+            conn.close()
+            st.success("Employees imported successfully.")
+
+        except Exception as e:
+            st.error(f"Import error: {e}")
 
 # ===================== MAIN APP & SIDEBAR =====================
 def main():
@@ -2049,4 +2120,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
