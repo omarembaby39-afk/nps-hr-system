@@ -9,6 +9,59 @@ import os
 import base64
 import calendar
 
+import json
+import os
+from pathlib import Path
+
+SETTINGS_FILE = Path(__file__).parent / "hr_settings.json"
+
+
+def load_settings():
+    """Load settings from hr_settings.json or return defaults."""
+    default_settings = {
+        "db_mode": "local",  # "local" or "cloud"
+        "local_db_path": r"C:\Users\acer\OneDrive\NilepsHR_Database\NPS_HR_DATA\hr.db",
+        "cloud_db_url": "",
+    }
+
+    try:
+        if SETTINGS_FILE.exists():
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            # Merge with defaults to avoid missing keys
+            default_settings.update(data)
+    except Exception:
+        # If file corrupt or unreadable, just use defaults
+        pass
+
+    return default_settings
+
+
+def save_settings(settings: dict):
+    """Save settings to hr_settings.json safely."""
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=4)
+        return True
+    except Exception as e:
+        import streamlit as st
+        st.error(f"Failed to save settings: {e}")
+        return False
+
+
+def get_db_config():
+    """
+    Helper you can use in your DB code.
+
+    Example:
+        cfg = get_db_config()
+        if cfg["db_mode"] == "local":
+            db_path = cfg["local_db_path"]
+        else:
+            db_url = cfg["cloud_db_url"]
+    """
+    return load_settings()
+
 # Optional PDF support
 try:
     from reportlab.pdfgen import canvas
@@ -2171,6 +2224,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
