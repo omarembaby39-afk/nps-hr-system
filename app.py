@@ -1751,8 +1751,91 @@ def database_page():
 
 
 # ===================== SETTINGS PAGE – DATA PATH =====================
+def settings_page():
+    import streamlit as st
+
+    st.title("Settings – Data Paths & Connection Mode")
+
+    settings = load_settings()
+
+    st.subheader("Connection Mode")
+    db_mode = st.radio(
+        "Select how the HR system connects to the database:",
+        options=["local", "cloud"],
+        format_func=lambda x: "Local SQLite (OneDrive)" if x == "local" else "Cloud Database (Neon / PostgreSQL)",
+        index=0 if settings.get("db_mode", "local") == "local" else 1,
+        horizontal=False,
+    )
+
+    st.write("---")
+
+    if db_mode == "local":
+        st.subheader("Local OneDrive Database Path")
+
+        local_db_path = st.text_input(
+            "Local hr.db path (for Windows / OneDrive):",
+            value=settings.get(
+                "local_db_path",
+                r"C:\Users\acer\OneDrive\NilepsHR_Database\NPS_HR_DATA\hr.db",
+            ),
+            help="This path is used when running the HR app on your local Windows PC with OneDrive.",
+        )
+
+        st.code(local_db_path, language="text")
+
+        st.info(
+            "Make sure this path points to a valid hr.db SQLite file in your OneDrive folder.\n"
+            "Example: C:\\Users\\acer\\OneDrive\\NilepsHR_Database\\NPS_HR_DATA\\hr.db"
+        )
+
+        cloud_db_url = settings.get("cloud_db_url", "")
+
+    else:
+        st.subheader("Cloud Database URL (Neon / PostgreSQL)")
+
+        cloud_db_url = st.text_input(
+            "PostgreSQL / Neon connection string:",
+            value=settings.get("cloud_db_url", ""),
+            type="password",
+            help="Example: postgresql://user:password@host:port/dbname?sslmode=require",
+        )
+
+        local_db_path = settings.get(
+            "local_db_path",
+            r"C:\Users\acer\OneDrive\NilepsHR_Database\NPS_HR_DATA\hr.db",
+        )
+
+        st.caption(
+            "Cloud mode is typically used on the DigitalOcean server. "
+            "Local mode is for your Windows + OneDrive installation."
+        )
+
+    st.write("---")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("💾 Save Settings", type="primary"):
+            new_settings = {
+                "db_mode": db_mode,
+                "local_db_path": local_db_path.strip(),
+                "cloud_db_url": cloud_db_url.strip(),
+            }
+            ok = save_settings(new_settings)
+            if ok:
+                st.success("Settings saved successfully.")
+            else:
+                st.error("Failed to save settings. Check server permissions.")
+
+    with col2:
+        if st.button("🔄 Reload Settings"):
+            st.experimental_rerun()
+
+    st.write("---")
+    st.subheader("Current Effective Settings")
+    st.json(load_settings())
 
 # ===================== ACCOUNTING SYNC – EXPORT MASTER DATA =====================
+
 # ===================== ACCOUNTING SYNC – EXPORT MASTER DATA =====================
 def accounting_sync_page():
     st.header("📤 Accounting Sync – Export HR Master Data")
@@ -2088,6 +2171,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
