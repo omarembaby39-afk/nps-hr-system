@@ -1320,13 +1320,13 @@ def attendance_page():
                 ti = last["time_in"].iloc[0]
                 to = last["time_out"].iloc[0]
                 try:
-                    default_in = datetime.strptime(ti, "%H:%M").time() if ti else time(7, 0)
+                    default_in = datetime.strptime(ti, "%H:%M").time() if ti else time(8, 0)
                 except Exception:
-                    default_in = time(7, 0)
+                    default_in = time(8, 0)
                 try:
-                    default_out = datetime.strptime(to, "%H:%M").time() if to else time(16, 0)
+                    default_out = datetime.strptime(to, "%H:%M").time() if to else time(17, 0)
                 except Exception:
-                    default_out = time(16, 0)
+                    default_out = time(17, 0)
 
             if default_proj_id not in projects["id"].tolist():
                 default_proj_id = int(projects["id"].iloc[0])
@@ -2224,6 +2224,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
